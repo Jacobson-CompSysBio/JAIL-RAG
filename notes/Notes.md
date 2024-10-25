@@ -1,5 +1,5 @@
 # Notes
-## What re We trying to test first?
+## What are We trying to test first?
 * Test if the model can glean information from a small graph
     * simulates a subgraph
 * Basic questions
@@ -18,7 +18,6 @@
             - Which nodes are included in the path?
             - What type of relationships do they represent?
             - Shortest-path analysis
-        - 
     
 
 
