@@ -1,12 +1,12 @@
 # Notes
-## What re We trying to test first?
+## What are we trying to test first?
 * Test if the model can glean information from a small graph
     * simulates a subgraph
 * Basic questions
     * Are nodes A and B connected?
     * How are they connected?
 
-## How Do We Test This?
+## How do we test this?
 * Could go straight to [G-Retreiver Step 4](images/Screenshot%202024-10-24%20at%2010.35.49 AM.png)
     * Project/Prepend to model with a graph encoder (kind of like prefix tuning/soft prompting)
 * Create "toy" graphs with fake interactions between fake genese
@@ -18,7 +18,6 @@
             - Which nodes are included in the path?
             - What type of relationships do they represent?
             - Shortest-path analysis
-        - 
     
 
 
