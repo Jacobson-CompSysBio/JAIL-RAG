@@ -98,9 +98,34 @@ class GraphTransformer(nn.Module):
 
 class GAT():
     
-    def __init__(self):
-        pass
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers, dropout, num_heads=4):
+        super(GAT, self).__init__()
+        self.convs = nn.ModuleList()
+        self.convs.append(GATConv(in_channels, hidden_channels, heads=num_heads, concat=False))
+        self.bns = nn.ModuleList()
+        self.bns.append(nn.BatchNorm1d(hidden_channels))
+        for _ in range(num_layers - 2):
+            self.convs.append(GATConv(hidden_channels, hidden_channels, heads=num_heads, concat=False))
+            self.bns.append(nn.BatchNorm1d(hidden_channels))
+        self.convs.append(GATConv(hidden_channels, out_channels, heads=num_heads, concat=False))
+        self.dropout = dropout
 
+    def reset_parameters(self):
+        for conv in self.convs:
+            conv.reset_parameters()
+        for bn in self.bns:
+            bn.reset_parameters()
+    
+    def forward(self, x, edge_index, edge_attr):
+        for i, conv in enumerate(self.convs[:-1]):
+            x = conv(x, edge_index=edge_index, edge_attr=edge_attr)
+            x = self.bns[i](x)
+            x = F.relu(x)
+            x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.convs[-1](x, edge_index=edge_index, edge_attr=edge_attr)
+        return x, edge_attr
+
+# define load gnn model dict that call respective class
 load_gnn_model = {
     'gcn': GCN,
     'gat': GAT,
