@@ -86,8 +86,15 @@ class GraphTransformer(nn.Module):
         for bn in self.bns:
             bn.reset_parameters()
     
-    def forward(self, x, adj_t):
-        pass
+    def forward(self, x, adj_t, edge_attr):
+        for i, conv in enumerate(self.convs[:-1]):
+            x = conv(x, edge_index=adj_t, edge_attr=edge_attr)
+            x = self.bns[i]
+            x = F.relu(x)
+            x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.convs[-1](x, edge_index=adj_t, edge_attr=edge_attr)
+        return x, edge_attr
+        
 
 class GAT():
     
