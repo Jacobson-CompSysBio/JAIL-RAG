@@ -1,9 +1,9 @@
 import networkx as nx
 import numpy as np
 import os
-from .textualize import *
-from .multiplex import *
-from .generate_split import generate_split
+from textualize import *
+from multiplex import *
+from generate_split import generate_split
 
 def _get_node_idx_from_pair_idx(idx: int, num_nodes: int) -> tuple[int, int]:
   u = int(idx / num_nodes)
@@ -134,3 +134,11 @@ def generate_data_mono(textualizer_name: str, output_path: str, flist: str, num_
 
   split_path = os.path.join(output_path, 'split')
   generate_split(num_qa, split_path)
+
+
+if __name__ == '__main__':
+  textualizer_name = 'edges'
+  output_path = '/mnt/DGX01/Personal/kyo/projects/JAIL-RAG/data/DREAM4_gold_standards'
+  flist = '/mnt/DGX01/Personal/kyo/projects/JAIL-RAG/data/DREAM4_gold_standards/mono_flist.tsv'
+  num_tests = 50
+  generate_data_mono(textualizer_name, output_path, flist, num_tests)
