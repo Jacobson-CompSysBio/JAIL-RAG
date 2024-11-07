@@ -18,36 +18,40 @@ EOS = '</s>'
 IGNORE_INDEX = -100
 
 # define the model
-class LLM(nn.module):
+class LLM(nn.Module):
 
     def __init__(
             self,
-            args,
+            max_txt_len: int = 512,
+            max_new_tokens: int = 32,
+            max_memory: list = [80, 80],
+            llm_model_path: str = "meta-llama/llama-8b-Instruct",
+            llm_frozen: str = "True",
             **kwargs):
         super().__init__()
 
         # hyperparameters
-        self.max_txt_len = args.max_txt_len
-        self.max_new_tokens = args.max_new_tokens
+        self.max_txt_len = max_txt_len
+        self.max_new_tokens = max_new_tokens
 
         print('Loading LLaMA...')
         kwargs ={
-            "max_memory": {i: f'{size}GiB' for i, size in enumerate(args.max_memory)},
+            "max_memory": {i: f'{size}GiB' for i, size in enumerate(max_memory)},
             "device_map": "auto",
             "revision": "main"
         }
-        self.tokenizer = AutoTokenizer.from_pretrained(args.llm_model_path,
+        self.tokenizer = AutoTokenizer.from_pretrained(llm_model_path,
                                                        use_fast=False,
                                                        revision=kwargs["revision"])
         self.tokenizer.pad_token_id = 0
         self.tokenizer.padding_side = "left"
 
-        model = AutoModelForCausalLM.from_pretrained(args.llm_model_path,
+        model = AutoModelForCausalLM.from_pretrained(llm_model_path,
                                                      torch_dtype=torch.float16,
                                                      low_cpu_mem_usage=True,
                                                      **kwargs)
         
-        if args.llm_frozen == 'True':
+        if llm_frozen == 'True':
             print('Freezing LLaMA...')
             for name, param in model.named_parameters():
                 param.requires_grad = False
@@ -87,7 +91,7 @@ class LLM(nn.module):
         enable_autocast = self.device != torch.device("cpu")
 
         if enable_autocast:
-            return torch.amp.autocast(dtype=dtype)
+            return torch.amp.autocast(dtype=dtype, device_type="cuda")
         else:
             return contextlib.nullcontext()
         
@@ -169,6 +173,7 @@ class LLM(nn.module):
             input_ids = descriptions.input_ids[i][:self.max_txt_len] + questions.input_ids[i] + eos_user_tokens.input_ids
             inputs_embeds = self.word_embedding(torch.tensor(input_ids).to(self.model.device))
             inputs_embeds = torch.cat([bos_embeds, inputs_embeds], dim=0)
+            batch_inputs_embeds.append(inputs_embeds)
             batch_attention_mask.append([1] * inputs_embeds.shape[0])
 
         # pad inputs_embeds
