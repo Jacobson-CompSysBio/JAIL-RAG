@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch.cuda.amp import autocast as autocast
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from torch_scatter import scatter
-from GraphEncoder import load_gnn_model
+from .graph_encoder import load_gnn_model
 from peft import (
     LoraConfig,
     get_peft_model,

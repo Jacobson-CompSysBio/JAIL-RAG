@@ -1,1 +1,0 @@
-# call encoder and LLM together to form simple g-retriever
