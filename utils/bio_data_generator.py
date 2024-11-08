@@ -138,7 +138,7 @@ def generate_data_mono(textualizer_name: str, output_path: str, flist: str, num_
 
 if __name__ == '__main__':
   textualizer_name = 'edges'
-  output_path = '/mnt/DGX01/Personal/kyo/projects/JAIL-RAG/data/DREAM4_gold_standards'
-  flist = '/mnt/DGX01/Personal/kyo/projects/JAIL-RAG/data/DREAM4_gold_standards/mono_flist.tsv'
+  output_path = '/mnt/DGX01/Personal/krusepi/codebase/projects/llms/JAIL-RAG/data/DREAM4_gold_standards'
+  flist = '/mnt/DGX01/Personal/krusepi/codebase/projects/llms/JAIL-RAG/data/DREAM4_gold_standards/mono_flist.tsv'
   num_tests = 50
   generate_data_mono(textualizer_name, output_path, flist, num_tests)
