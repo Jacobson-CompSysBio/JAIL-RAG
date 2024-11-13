@@ -1,5 +1,5 @@
-./data/DREAM4_gold_standards/insilico_size10_1_goldstandard.tsv	coexpression-heart
-./data/DREAM4_gold_standards/insilico_size10_2_goldstandard.tsv	coexpression-liver
-./data/DREAM4_gold_standards/insilico_size10_3_goldstandard.tsv	database_annotated
-./data/DREAM4_gold_standards/insilico_size10_4_goldstandard.tsv	gene_fusion
-./data/DREAM4_gold_standards/insilico_size10_5_goldstandard.tsv	homology
+../data/DREAM4_gold_standards/insilico_size10_1_goldstandard.tsv	coexpression-heart
+../data/DREAM4_gold_standards/insilico_size10_2_goldstandard.tsv	coexpression-liver
+../data/DREAM4_gold_standards/insilico_size10_3_goldstandard.tsv	database_annotated
+../data/DREAM4_gold_standards/insilico_size10_4_goldstandard.tsv	gene_fusion
+../data/DREAM4_gold_standards/insilico_size10_5_goldstandard.tsv	homology
