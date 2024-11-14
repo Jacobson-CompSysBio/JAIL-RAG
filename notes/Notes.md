@@ -18,6 +18,22 @@
             - Which nodes are included in the path?
             - What type of relationships do they represent?
             - Shortest-path analysis
-    
+
+# Thursday, Nov. 7
+* Is it worth it to "squish" all the layers of the multiplex together when we encode, or should we keep them separate when we process them?
+* **possible solution:** keep layers separate in the graph encoding step
+* **possible solution 2:** if different layers have more complexity, how can we embed them into different size spaces?
+    * we can pad the different-sized vectors with 0 so that they're all length `embd_size` after projection
+
+## Goals
+* test normal LLM (super naive benchmark)
+* test g-retriever methods (naive benchmark with graph encoder)
+* change the textualizer to ours
+* change graph 
+
+1. get our own benchmark on our datasets with their code
+2. 
+
+[the, dog, [walked]] -> [the, dog, [walked]]
 
 

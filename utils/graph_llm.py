@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch.cuda.amp import autocast as autocast
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from torch_scatter import scatter
-from GraphEncoder import load_gnn_model
+from .graph_encoder import load_gnn_model
 from peft import (
     LoraConfig,
     get_peft_model,
@@ -25,10 +25,22 @@ class GraphLLM(nn.Module):
     Graph LLM object, re-implemented from G-Retriever: https://github.com/XiaoxinHe/G-Retriever/blob/main/src/model/graph_llm.py
     """
 
-    def __init__(self, args, **kwargs):
+    def __init__(self,
+                 max_txt_len: int = 512,
+                 max_new_tokens: int = 32,
+                 llm_model_path: str = "meta-llama/Meta-Llama-3-8B-Instruct",
+                 llm_frozen: str = "True",
+                 gnn_model_name: str = "gt",
+                 gnn_in_dim: int = 1024,
+                 gnn_hidden_dim: int = 1024,
+                 gnn_num_layers: int = 4,
+                 gnn_dropout: float = 0.0,
+                 gnn_num_heads: int = 4,
+
+                 **kwargs):
         super().__init__()
-        self.max_tx_len = args.max_txt_len
-        self.max_new_tokens = args.max_new_tokens
+        self.max_tx_len = max_txt_len
+        self.max_new_tokens = max_new_tokens
 
         print('Loading LLaMA...')
         kwargs = {
@@ -38,20 +50,20 @@ class GraphLLM(nn.Module):
         }
 
         # create tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(args.llm_model_path, 
+        self.tokenizer = AutoTokenizer.from_pretrained(llm_model_path, 
                                                        use_fast=False, 
                                                        revision=kwargs["revision"])
         self.tokenizer.pad_token_id = 0
         self.tokenizer.padding_side = 'left'
 
         # create model
-        model = AutoModelForCausalLM.from_pretrained(args.llm_model_path,
+        model = AutoModelForCausalLM.from_pretrained(llm_model_path,
                                                      torch_dtype=torch.float16,
                                                      low_cpu_mem_usage=True,
                                                      **kwargs)
         
         # freeze model if specified
-        if args.llm_frozen == "True":
+        if llm_frozen == "True":
             print("Freezing LLaMA!")
             for name, param in model.named_parameters():
                 param.requires_grad = False # don't update weights for these layers
@@ -73,24 +85,24 @@ class GraphLLM(nn.Module):
                 bias="none",
                 task_type="CAUSAL_LM"
             )
-            
-        # load autoregressive component
-        model = get_peft_model(model, config)
+            model = get_peft_model(model, config)
+    
         self.model = model
+        print("Finished loading LLaMA!")
 
         # load graph encoder component - load_gnn_model function is from GraphEncoder.py 
-        self.graph_encoder = load_gnn_model[args.gnn_model_name](
-            in_channels = args.gnn_in_dim,
-            out_channels = args.gnn_hidden_dim,
-            hidden_channels = args.gnn_hidden_dim,
-            num_layers = args.gnn_num_layers,
-            dropout = args.gnn_dropout,
-            num_heads=args.gnn_num_heads
+        self.graph_encoder = load_gnn_model[gnn_model_name](
+            in_channels = gnn_in_dim,
+            out_channels = gnn_hidden_dim,
+            hidden_channels = gnn_hidden_dim,
+            num_layers = gnn_num_layers,
+            dropout = gnn_dropout,
+            num_heads=gnn_num_heads
         ).to(self.model.device)
 
         # add MLP to project graph encoder output to match llm input
         self.projector = nn.Sequential(
-            nn.Linear(args.gnn_hidden_dim, 2048),
+            nn.Linear(gnn_hidden_dim, 2048),
             nn.Sigmoid(),
             nn.Linear(2048, 4096)
         ).to(self.model.device)

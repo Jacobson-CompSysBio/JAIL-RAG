@@ -5,7 +5,7 @@ Ideally, we want to make/implement a RAG-based framework that leverages connecti
 
 # How will we do it?
 
-1. [`graphrag`](https://github.com/microsoft/graphrag/blob/main/RAI_TRANSPARENCY.md#what-can-graphrag-do): How does GraphRAG work?
+1. ![`graphrag`](https://github.com/microsoft/graphrag/blob/main/RAI_TRANSPARENCY.md#what-can-graphrag-do): How does GraphRAG work?
     * **Extracting a Knowledge Graph:** It starts by creating a "knowledge graph" from the raw text. A knowledge graph is like a network of connected ideas, where each idea (or "node") is linked to others in meaningful ways.
     * **Building a Community Hierarchy:** Next, it organizes these connected ideas into groups, or "communities." Think of these communities as clusters of related concepts.
     * **Generating Summaries:** For each community, GraphRAG generates summaries that capture the main points. This helps in understanding the key ideas without getting lost in details.

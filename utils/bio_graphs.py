@@ -2,7 +2,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-PATH = 'data/DREAM4_gold_standards'
+PATH = '../data/DREAM4_gold_standards'
 
 class BiologicalDataset(Dataset):
   def __init__(self):

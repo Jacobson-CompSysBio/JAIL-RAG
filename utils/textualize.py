@@ -1,4 +1,4 @@
-from multiplex import *
+from .multiplex import *
 
 def textualize_edges(mp: Multiplex) -> list[str]:
     text = []
