@@ -62,11 +62,13 @@ def rwr_encoding(seeds: str | list[str],
                  restart_prob: float = 0.7,
                  tau: None | list[float] = None,
                  threshold: float = 1e-10):
-  if type(seeds) is not list:
+  if isinstance(seeds, str):
     seeds = [seeds]
   
   # Check that all seeds are in the node_list
-  in_node_list = []
+  in_node_list = [ seed not in node_list for seed in seeds]
+  if sum(in_node_list) > 0:
+    raise ValueError(f'Not all seeds are in the node_list')
 
   # Create transition matrix for Markov process by normlaizing each column
   # in the adjacency matrix
