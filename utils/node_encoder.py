@@ -20,7 +20,7 @@ def encode_nodes(nodes_to_encode: str | list[str],
   allowed_base_encode_methods = ['rwr']
   allowed_up_encode_method = ['pad']
 
-  if not (isinstance(nodes_to_encode, str) or isinstance(nodes_to_encode, list[str])):
+  if not (isinstance(nodes_to_encode, str) or isinstance(nodes_to_encode, list)):
     raise TypeError("nodes_to_encode must be a 'str' or 'list[str]'")
   if not isinstance(mp, Multiplex):
     raise TypeError("mp must be a Multiplex")
