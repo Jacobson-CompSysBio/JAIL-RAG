@@ -260,7 +260,7 @@ def generate_data_mono(textualizer_name: str, base_dir: str, flist: str, num_tes
   # generate_split(num_qa, split_path)
 
 if __name__ == '__main__':
-  textualizer_name = 'edges'
+  textualizer_name = 'node_layer_attr'
   # output_path = '/Users/kyo/projects/JAIL-RAG/data/DREAM4_gold_standards'
   # flist = '/Users/kyo/projects/JAIL-RAG/data/DREAM4_gold_standards/mono_flist.tsv'
   output_path = '/mnt/DGX01/Personal/kyo/projects/JAIL-RAG/data/DREAM4_gold_standards'
