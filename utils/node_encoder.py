@@ -1,9 +1,9 @@
 from numbers import Integral
 import numpy as np
 
-from .multiplex import Multiplex
-from .rwr import rwr_encoding
-from .utils import get_allowed_values_as_str
+from multiplex import Multiplex
+from rwr import rwr_encoding
+from utils import get_allowed_values_as_str
 
 def encode_nodes(nodes_to_encode: str | list[str],
                  mp: Multiplex,

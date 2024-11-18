@@ -75,3 +75,32 @@ class Multiplex:
   def nodes(self) -> list:
     """Get list of nodes"""
     return self._nodes
+
+  @property
+  def src(self, layer_idx: int = -1) -> list:
+    if layer_idx < -1 or layer_idx >= len(self):
+      raise ValueError(f'layer_idx must be between -1 and {len(self)-1}')
+    
+    edges = []
+    if layer_idx == -1:
+      for l in self.layers:
+        edges += list(self.layers[l]['graph'].edges())
+    else:
+      edges += list(self.layers[layer_idx]['graph'].edges())
+    
+    return [e[0] for e in edges]
+  
+  @property
+  def dst(self, layer_idx: int = -1) -> list:
+    if layer_idx < -1 or layer_idx >= len(self):
+      raise ValueError(f'layer_idx must be between -1 and {len(self)-1}')
+    
+    edges = []
+    if layer_idx == -1:
+      for l in self.layers:
+        edges += list(self.layers[l]['graph'].edges())
+    else:
+      edges += list(self.layers[layer_idx]['graph'].edges())
+    
+    return [e[1] for e in edges]
+  

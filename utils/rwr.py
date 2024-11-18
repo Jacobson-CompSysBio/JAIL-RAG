@@ -3,7 +3,7 @@ import numpy as np
 from scipy import sparse
 import math
 from scipy.stats import gmean
-from .utils import get_allowed_values_as_str
+from utils import get_allowed_values_as_str
 
 def column_norm(X):
   return sparse.csc_array(normalize(X, norm='l1', axis=0))
@@ -18,7 +18,7 @@ def random_walk_restart(M: sparse.csr_array,
                         p0: np.ndarray,
                         r: float,
                         L: int,
-                        tau: None | list[float] = None,
+                        tau: None = None,
                         threshold: float = 1e-10) -> np.ndarray:
   # Check inputs
   if r < 0 or r > 1:
@@ -63,7 +63,7 @@ def rwr_encoding(seeds: str | list[str],
                  L: int,
                  restart_prob: float = 0.7,
                  mean_type: None | str = None,
-                 tau: None | list[float] = None,
+                 tau: None = None,
                  threshold: float = 1e-10):
   
   def geometric_mean(X: np.ndarray, L: int, N: int):
