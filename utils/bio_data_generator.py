@@ -26,6 +26,7 @@ def generate_connection_data_mono(textualize,
                                   mp: Multiplex,
                                   output_dir: str,
                                   file_name: str,
+                                  use_node_id: bool = False,
                                   num_tests: int = -1,
                                   bal_pos_neg: bool = True) -> None:
   if len(mp) > 1:
@@ -87,6 +88,10 @@ def generate_connection_data_mono(textualize,
       else:
         u, v = edges[idx]
 
+    if use_node_id:
+      u = mp.nodes.index(u)
+      v = mp.nodes.index(v)
+
     question = f'Is there an edge between nodes {u} and {v}?'
     desc = textualize(mp)
     label = 'yes'
@@ -113,6 +118,10 @@ def generate_connection_data_mono(textualize,
     elif mp[0]['graph'].has_edge(u, v):
       pass
     else:
+      if use_node_id:
+        u = nodes.index(u)
+        v = nodes.index(v)
+    
       question = f'Is there an edge between nodes {u} and {v}?'
       desc = textualize(mp)
       label = 'no'
@@ -123,7 +132,8 @@ def generate_connection_data_mono(textualize,
 
   os.makedirs(output_dir, exist_ok=True)
   output_file = os.path.join(output_dir, file_name)
-  data.to_csv(output_file, sep='\t', index=False)
+  add_headers = not os.path.exists(output_file)
+  data.to_csv(output_file, sep='\t', index=False, mode='a', header=add_headers)
 
   graph_dir = os.path.join(output_dir, 'graphs')
   os.makedirs(graph_dir, exist_ok=True)
@@ -141,34 +151,6 @@ def generate_connection_data_mono(textualize,
 
   return num_tests
 
-  # nodes = mp.nodes
-  # max_pairs = _get_max_pairs(mp.num_nodes)
-
-  # if num_tests >= max_pairs:
-  #   print(f'Limiting number of connection tests to {max_pairs} to avoid duplication.')
-  #   num_tests = max_pairs
-
-  # pairs_idx = np.random.choice(range(max_pairs), num_tests, replace=False)
-
-  # if not os.path.isfile(output_file):
-  #   with open(output_file, "w") as fp:
-  #     fp.write('question\tlabel\tdesc\n')
-      
-  # with open(output_file, "a") as fp:
-  #   for i in pairs_idx:
-  #     u_idx, v_idx = _get_node_idx_from_pair_idx(i, mp.num_nodes)
-  #     u = nodes[u_idx]
-  #     v = nodes[v_idx]
-
-  #     if mp[0]['graph'].has_edge(u,v):
-  #       label = 'yes'
-  #     else:
-  #       label = 'no'
-      
-  #     question = f'Is there an edge between nodes {u} and {v}?'
-  #     desc = textualize(mp)
-
-  #     fp.write(f'{question}\t{label}\t{desc}\n')
 
 def generate_path_data_mono(textualize, mp: Multiplex, num_tests: int, output_file: str) -> None:
   if len(mp) > 1:
@@ -204,60 +186,162 @@ def generate_path_data_mono(textualize, mp: Multiplex, num_tests: int, output_fi
 
       fp.write(f'{question}\t{label}\t{desc}\n')
 
-def generate_shortest_path_data_mono(textualize, mp: Multiplex, num_tests: int, output_file: str) -> None:
+def generate_shortest_path_data_mono(textualize,
+                                     mp: Multiplex,
+                                     output_dir: str,
+                                     file_name: str,
+                                     use_node_id: bool = False,
+                                     num_tests: int = -1) -> None:
   if len(mp) > 1:
     print("Skipping 'generate_shortest_path_data_mono' - test is designed for monoplexes")
     return
   
-  nodes = mp.nodes
-  max_pairs = _get_max_pairs(mp.num_nodes)
+  N = mp.layers[0]['graph'].number_of_nodes()
+  # Calculate maximum number of pairs (i,j) where i != j
+  max_pairs = N * (N - 1)
 
-  if num_tests >= max_pairs:
-    print(f'Limiting number of shortest path tests to {max_pairs} to avoid duplication.')
+  if num_tests == -1:
+    print(f'Setting number of shortest tests to {max_pairs}')
     num_tests = max_pairs
-
-  pairs_idx = np.random.choice(range(max_pairs), num_tests, replace=False)
-
-  if not os.path.isfile(output_file):
-    with open(output_file, "w") as fp:
-      fp.write('question\tlabel\tdesc\n')
+  if num_tests > max_pairs:
+    print(f'Limiting number of connection tests to {max_pairs} to avoid duplication.')
+    num_tests = max_pairs
   
-  with open(output_file, "a") as fp:
-    for i in pairs_idx:
-      u_idx, v_idx = _get_node_idx_from_pair_idx(i, mp.num_nodes)
-      u = nodes[u_idx]
-      v = nodes[v_idx]
+  if nx.is_connected(mp[0]['graph']):
+    print('Graph is a single connected component. No negative tests will be created.')
+    n_pos_tests = num_tests
+    n_neg_tests = 0
+  
+  data = pd.DataFrame(None, columns=['question','label','desc'])
 
-      if nx.has_path(mp[0]['graph'], u, v):
-        label = nx.shortest_path(mp[0]['graph'], u, v)
-      else:
-        label = 'There is no path'
+  pair_idxs = np.array([i for i in range(N*N)])
+  sampler = array_sampler(pair_idxs)
+  nodes = mp.nodes
+
+  n_tests_p, n_tests_n = 0, 0
+  while n_tests_p < n_pos_tests or n_tests_n < n_neg_tests:
+    if sampler.empty:
+      print('All pairs check of shortest path, but not enough tests were genearted')
+      break
+
+    pair_idx = sampler.sample()
+
+    u_idx = int(pair_idx / N)
+    v_idx = pair_idx % N
+
+    if u_idx == v_idx:
+      continue
+
+    u = nodes[u_idx]
+    v = nodes[v_idx]
+
+    has_path = nx.has_path(mp[0]['graph'], u, v)
+    if has_path:
+      path = nx.shortest_path(mp[0]['graph'], u, v)
+    else:
+      path = []
+
+    if use_node_id:
+      u = nodes.index(u)
+      v = nodes.index(v)
+
+    question = f'What is a shortest path between nodes {u} and {v}?'
+    desc = textualize(mp)
+
+    if has_path and n_tests_p < n_pos_tests:
+      label = path
+      data.loc[len(data)] = [question, label, desc]
+      n_tests_p += 1
+    else:
+      label = 'There is no path'
+      data.loc[len(data)] = [question, label, desc]
+      n_tests_n += 1
+
+    
+
+    
+  
+  data = data.sample(frac=1)
+
+  os.makedirs(output_dir, exist_ok=True)
+  output_file = os.path.join(output_dir, file_name)
+  add_headers = not os.path.exists(output_file)
+  data.to_csv(output_file, sep='\t', index=False, mode='a', header=add_headers)
+
+  graph_dir = os.path.join(output_dir, 'graphs')
+  os.makedirs(graph_dir, exist_ok=True)
+  graph_count = 0
+  for file in os.listdir(graph_dir):
+    if file.endswith('.pt'):
+      graph_count += 1
+  
+  for t in range(num_tests):
+    node_encoding = encode_nodes(mp.nodes, mp)
+    edge_index = torch.LongTensor([mp.src, mp.dst])
+    data = Data(x=node_encoding, edge_index=edge_index, num_nodes=N)
+    graph_file = os.path.join(graph_dir, f'{graph_count + t}.pt')
+    torch.save(data, graph_file)
+
+  return num_tests
+
+  # nodes = mp.nodes
+  # max_pairs = _get_max_pairs(mp.num_nodes)
+
+  # if num_tests >= max_pairs:
+  #   print(f'Limiting number of shortest path tests to {max_pairs} to avoid duplication.')
+  #   num_tests = max_pairs
+
+  # pairs_idx = np.random.choice(range(max_pairs), num_tests, replace=False)
+
+  # if not os.path.isfile(output_file):
+  #   with open(output_file, "w") as fp:
+  #     fp.write('question\tlabel\tdesc\n')
+  
+  # with open(output_file, "a") as fp:
+  #   for i in pairs_idx:
+  #     u_idx, v_idx = _get_node_idx_from_pair_idx(i, mp.num_nodes)
+  #     u = nodes[u_idx]
+  #     v = nodes[v_idx]
+
+  #     if nx.has_path(mp[0]['graph'], u, v):
+  #       label = nx.shortest_path(mp[0]['graph'], u, v)
+  #     else:
+  #       label = 'There is no path'
       
-      question = f'What is the shortest path between nodes {u} and {v}?'
-      desc = textualize(mp)
+  #     question = f'What is the shortest path between nodes {u} and {v}?'
+  #     desc = textualize(mp)
 
-      fp.write(f'{question}\t{label}\t{desc}\n')
+  #     fp.write(f'{question}\t{label}\t{desc}\n')
 
 def generate_data_mono(textualizer_name: str, base_dir: str, flist: str, num_tests: int) -> None:
   textualize = load_textualizer[textualizer_name]
   mp = Multiplex(flist)
 
-  print('Generating connections data sset')
-  output_dir = os.path.join(base_dir, 'connections')
-  n_success = generate_connection_data_mono(textualize, mp, output_dir, 'train_dev.tsv')
-  split_path = os.path.join(output_path, 'split')
-  generate_split(n_success, split_path)
+  # print('Generating connections data set for node_label')
+  # output_dir = os.path.join(base_dir, 'connections_node_label')
+  # num_tests = generate_connection_data_mono(textualize, mp, output_dir, 'train_dev.tsv')
+  # split_path = os.path.join(output_dir, 'split')
+  # generate_split(num_tests, split_path)
 
-  # num_qa += num_tests
+  # print('Generating connections data set for node_id')
+  # output_dir = os.path.join(base_dir, 'connections_node_id')
+  # num_tests = generate_connection_data_mono(textualize, mp, output_dir, 'train_dev.tsv', use_node_id=True)
+  # split_path = os.path.join(output_dir, 'split')
+  # generate_split(num_tests, split_path)
 
-  # generate_path_data_mono(textualize, mp, num_tests, output_file)
-  # num_qa += num_tests
 
-  # generate_shortest_path_data_mono(textualize, mp, num_tests, output_file)
-  # num_qa += num_tests
+  # print('Generating shortest data set for node_label')
+  # output_dir = os.path.join(base_dir, 'shortest_path_node_label')
+  # num_tests = generate_shortest_path_data_mono(textualize, mp, output_dir, 'train_dev.tsv')
+  # split_path = os.path.join(output_dir, 'split')
+  # generate_split(num_tests, split_path)
 
-  # split_path = os.path.join(output_path, 'split')
-  # generate_split(num_qa, split_path)
+  print('Generating shortest data set for node_id')
+  output_dir = os.path.join(base_dir, 'shortest_path_node_id')
+  num_tests = generate_shortest_path_data_mono(textualize, mp, output_dir, 'train_dev.tsv', use_node_id=True)
+  split_path = os.path.join(output_dir, 'split')
+  generate_split(num_tests, split_path)
+
 
 if __name__ == '__main__':
   textualizer_name = 'node_layer_attr'

@@ -28,3 +28,7 @@ class array_sampler:
     self.num_values -= 1
 
     return val
+
+  @property
+  def empty(self) -> bool:
+    return self.num_values == 0
