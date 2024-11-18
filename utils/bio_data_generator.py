@@ -237,9 +237,9 @@ def generate_shortest_path_data_mono(textualize,
 
     has_path = nx.has_path(mp[0]['graph'], u, v)
     if has_path:
-      path = nx.shortest_path(mp[0]['graph'], u, v)
+      paths = [p for p in nx.all_shortest_paths(mp[0]['graph'], u, v)]
     else:
-      path = []
+      paths = [[]]
 
     if use_node_id:
       u = nodes.index(u)
@@ -249,7 +249,7 @@ def generate_shortest_path_data_mono(textualize,
     desc = textualize(mp)
 
     if has_path and n_tests_p < n_pos_tests:
-      label = path
+      label = paths
       data.loc[len(data)] = [question, label, desc]
       n_tests_p += 1
     else:
