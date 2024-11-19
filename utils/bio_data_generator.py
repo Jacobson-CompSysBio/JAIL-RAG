@@ -151,7 +151,6 @@ def generate_connection_data_mono(textualize,
 
   return num_tests
 
-
 def generate_path_data_mono(textualize, mp: Multiplex, num_tests: int, output_file: str) -> None:
   if len(mp) > 1:
     print("Skipping 'generate_path_data_mono' - test is designed for monoplexes")
@@ -317,24 +316,24 @@ def generate_data_mono(textualizer_name: str, base_dir: str, flist: str, num_tes
   textualize = load_textualizer[textualizer_name]
   mp = Multiplex(flist)
 
-  # print('Generating connections data set for node_label')
-  # output_dir = os.path.join(base_dir, 'connections_node_label')
-  # num_tests = generate_connection_data_mono(textualize, mp, output_dir, 'train_dev.tsv')
-  # split_path = os.path.join(output_dir, 'split')
-  # generate_split(num_tests, split_path)
+  print('Generating connections data set for node_label')
+  output_dir = os.path.join(base_dir, 'connections_node_label')
+  num_tests = generate_connection_data_mono(textualize, mp, output_dir, 'train_dev.tsv')
+  split_path = os.path.join(output_dir, 'split')
+  generate_split(num_tests, split_path)
 
-  # print('Generating connections data set for node_id')
-  # output_dir = os.path.join(base_dir, 'connections_node_id')
-  # num_tests = generate_connection_data_mono(textualize, mp, output_dir, 'train_dev.tsv', use_node_id=True)
-  # split_path = os.path.join(output_dir, 'split')
-  # generate_split(num_tests, split_path)
+  print('Generating connections data set for node_id')
+  output_dir = os.path.join(base_dir, 'connections_node_id')
+  num_tests = generate_connection_data_mono(textualize, mp, output_dir, 'train_dev.tsv', use_node_id=True)
+  split_path = os.path.join(output_dir, 'split')
+  generate_split(num_tests, split_path)
 
 
-  # print('Generating shortest data set for node_label')
-  # output_dir = os.path.join(base_dir, 'shortest_path_node_label')
-  # num_tests = generate_shortest_path_data_mono(textualize, mp, output_dir, 'train_dev.tsv')
-  # split_path = os.path.join(output_dir, 'split')
-  # generate_split(num_tests, split_path)
+  print('Generating shortest data set for node_label')
+  output_dir = os.path.join(base_dir, 'shortest_path_node_label')
+  num_tests = generate_shortest_path_data_mono(textualize, mp, output_dir, 'train_dev.tsv')
+  split_path = os.path.join(output_dir, 'split')
+  generate_split(num_tests, split_path)
 
   print('Generating shortest data set for node_id')
   output_dir = os.path.join(base_dir, 'shortest_path_node_id')
