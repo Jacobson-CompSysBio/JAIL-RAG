@@ -39,6 +39,10 @@ class Multiplex:
     self._nodes.sort()
   
   def adj_matrix(self, delta: float = 0.5):
+    # Check that delta is valid
+    if delta < 0 or delta > 1:
+      raise ValueError('delta should be in [0,1]')
+    
     L = len(self)
 
     # Check if multiplex is empty
@@ -49,10 +53,6 @@ class Multiplex:
     if L == 1:
       return nx.adjacency_matrix(self.layers[0]['graph'], self._nodes)
     
-    # Check that delta is valid
-    if delta < 0 or delta > 1:
-      raise ValueError('delta should be in [0,1]')
-
     N = self.num_nodes
     eye = delta / (L-1) * sparse.identity(N, format='csr')
     
@@ -81,6 +81,9 @@ class Multiplex:
     if layer_idx < -1 or layer_idx >= len(self):
       raise ValueError(f'layer_idx must be between -1 and {len(self)-1}')
     
+    if len(self) == 0:
+      return []
+    
     edges = []
     if layer_idx == -1:
       for layer in self.layers:
@@ -96,6 +99,9 @@ class Multiplex:
   def dst(self, layer_idx: int = -1) -> list:
     if layer_idx < -1 or layer_idx >= len(self):
       raise ValueError(f'layer_idx must be between -1 and {len(self)-1}')
+    
+    if len(self) == 0:
+      return []
     
     edges = []
     if layer_idx == -1:
