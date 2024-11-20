@@ -51,4 +51,29 @@ def _save_checkpoint(model, optimizer, cur_epoch, args, is_best=False):
 
     print("Saving checkpoint at epoch {} to {}.".format(cur_epoch, path))
     torch.save(save_obj, path)
-    
+
+def _reload_best_model(model, args):
+    """
+    Load best ckpt for evaluation
+    """
+
+    # make a better path
+    checkpoint_path = f'{args.output_dir}/{args.dataset}/model_name_{args.model_name}_llm_model_name_{args.llm_model_name}_best.pth'
+    print(f"Loading checkpoint from {checkpoint_path}.")
+
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    model.load_state_dict(checkpoint["model"])
+
+    return model
+
+def _reload_model(model, checkpoint_path):
+    """
+    Load model from checkpoint paths
+    """
+
+    print(f"Loading checkpoint from {checkpoint_path}.")
+
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    model.load_state_dict(checkpoint["model"], strict=False)
+
+    return model
