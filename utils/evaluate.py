@@ -89,5 +89,4 @@ def eval_hit(prediction, answer):
 
 # can add evaluation functions for tasks here
 eval_funcs = {
-    
 }
