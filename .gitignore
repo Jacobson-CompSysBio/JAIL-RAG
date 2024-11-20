@@ -2,3 +2,4 @@
 *.txt
 *train_dev.tsv
 *.pt
+checkpoints/*
