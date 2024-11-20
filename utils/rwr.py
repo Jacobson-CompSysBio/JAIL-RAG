@@ -57,6 +57,45 @@ def random_walk_restart(M: sparse.csr_array,
 
   return p
 
+def _geometric_mean(X: np.ndarray, L: int, N: int):
+  # Check inputs
+  if X.shape[0] != N*L:
+    raise ValueError('The number of rows in X must equak N*L')
+    
+  mean = np.empty(N)
+
+  for i in range(N):
+    idx = np.array([i + l*N for l in range(L)])
+    mean[i] = gmean(X[idx])
+    
+  return mean
+
+def _arithemtic_mean(X: np.ndarray, L: int, N: int):
+  # Check inputs
+  if X.shape[0] != N*L:
+    raise ValueError('The number of rows in X must equak N*L')
+    
+  mean = np.empty(N)
+
+  for i in range(N):
+    idx = np.array([i + l*N for l in range(L)])
+    mean[i] = np.mean(X[idx])
+    
+  return mean
+  
+def _sum_scores(X: np.ndarray, L: int, N: int):
+  # Check inputs
+  if X.shape[0] != N*L:
+    raise ValueError('The number of rows in X must equak N*L')
+  
+  mean = np.empty(N)
+
+  for i in range(N):
+    idx = np.array([i + l*N for l in range(L)])
+    mean[i] = sum(X[idx])
+    
+  return mean
+
 def rwr_encoding(seeds: str,
                  adj,
                  node_list: list,
@@ -65,46 +104,6 @@ def rwr_encoding(seeds: str,
                  mean_type: str = None,
                  tau: None = None,
                  threshold: float = 1e-10):
-  
-  def geometric_mean(X: np.ndarray, L: int, N: int):
-    # Check inputs
-    if X.shape[0] != N*L:
-      raise ValueError('The number of rows in X must equak N*L')
-    
-    mean = np.empty(N)
-
-    for i in range(N):
-      idx = np.array([i + l*N for l in range(L)])
-      mean[i] = gmean(X[idx])
-    
-    return mean
-  
-  def arithemtic_mean(X: np.ndarray, L: int, N: int):
-    # Check inputs
-    if X.shape[0] != N*L:
-      raise ValueError('The number of rows in X must equak N*L')
-    
-    mean = np.empty(N)
-
-    for i in range(N):
-      idx = np.array([i + l*N for l in range(L)])
-      mean[i] = np.mean(X[idx])
-    
-    return mean
-  
-  def sum_scores(X: np.ndarray, L: int, N: int):
-    # Check inputs
-    if X.shape[0] != N*L:
-      raise ValueError('The number of rows in X must equak N*L')
-    
-    mean = np.empty(N)
-
-    for i in range(N):
-      idx = np.array([i + l*N for l in range(L)])
-      mean[i] = sum(X[idx])
-    
-    return mean
-  
   if isinstance(seeds, str):
     seeds = [seeds]
   
@@ -144,11 +143,11 @@ def rwr_encoding(seeds: str,
     # Summarize the embedding values for each layer
     if L > 1 and mean_type is not None:
       if mean_type == 'Geometric':
-        p_stable = geometric_mean(p_stable, L, N)
+        p_stable = _geometric_mean(p_stable, L, N)
       elif mean_type == "Arithmetic":
-        p_stable = arithemtic_mean(p_stable, L, N)
+        p_stable = _arithemtic_mean(p_stable, L, N)
       else:
-        p_stable = sum_scores(p_stable, L, N)
+        p_stable = _sum_scores(p_stable, L, N)
     
     # Normalize vector
     p_stable = p_stable / np.sum(p_stable)
