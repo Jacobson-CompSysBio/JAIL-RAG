@@ -36,4 +36,9 @@
 
 [the, dog, [walked]] -> [the, dog, [walked]]
 
+# Thursday, Nov. 21
 
+* meeting w/ John
+1. Combining the text/summary rag-esque method with the G-retriever method
+2. summary -> G-Retriever? G-retriever -> summary? all testable hypotheses
+3. Use summary as a text prompt? Embed as a soft prompt?

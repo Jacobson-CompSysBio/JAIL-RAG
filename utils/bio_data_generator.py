@@ -346,6 +346,8 @@ if __name__ == '__main__':
   textualizer_name = 'node_layer_attr'
   # output_path = '/Users/kyo/projects/JAIL-RAG/data/DREAM4_gold_standards'
   # flist = '/Users/kyo/projects/JAIL-RAG/data/DREAM4_gold_standards/mono_flist.tsv'
+
+  # CHANGE PATHS
   output_path = '/mnt/DGX01/Personal/kyo/projects/JAIL-RAG/data/DREAM4_gold_standards'
   flist = '/mnt/DGX01/Personal/kyo/projects/JAIL-RAG/data/DREAM4_gold_standards/mono_flist.tsv'
   num_tests = 50
