@@ -1,0 +1,5 @@
+tests/data/insilico_size10_1_goldstandard.tsv	type_1
+tests/data/insilico_size10_2_goldstandard.tsv	type_2
+tests/data/insilico_size10_3_goldstandard.tsv	type_3
+tests/data/insilico_size10_4_goldstandard.tsv	type_4
+tests/data/insilico_size10_5_goldstandard.tsv	type_5
