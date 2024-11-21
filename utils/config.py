@@ -50,7 +50,6 @@ def parse_args_llama():
     parser.add_argument("--gnn_num_heads", type=int, default=4)
     parser.add_argument("--gnn_dropout", type=float, default=0.0)
     
-
     # get args we just initialized and return them
     args = parser.parse_args()
     return args
