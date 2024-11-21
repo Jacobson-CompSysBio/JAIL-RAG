@@ -31,13 +31,13 @@ class GraphLLM(nn.Module):
                  llm_model_path: str = "meta-llama/Meta-Llama-3-8B-Instruct",
                  llm_frozen: str = "True",
                  gnn_model_name: str = "gt",
-                 gnn_in_dim: int = 1024,
+                 gnn_in_dim: int = 1024, # corresponds to rwr output dimension
                  gnn_hidden_dim: int = 1024,
                  gnn_num_layers: int = 4,
                  gnn_dropout: float = 0.0,
                  gnn_num_heads: int = 4,
-
                  **kwargs):
+        
         super().__init__()
         self.max_tx_len = max_txt_len
         self.max_new_tokens = max_new_tokens
