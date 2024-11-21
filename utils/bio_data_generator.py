@@ -144,7 +144,7 @@ def generate_connection_data_mono(textualize,
   
   for t in range(num_tests):
     node_encoding = encode_nodes(mp.nodes, mp)
-    edge_index = torch.LongTensor([mp.src, mp.dst])
+    edge_index = torch.LongTensor([mp.src(), mp.dst()])
     data = Data(x=node_encoding, edge_index=edge_index, num_nodes=N)
     graph_file = os.path.join(graph_dir, f'{graph_count + t}.pt')
     torch.save(data, graph_file)
@@ -282,7 +282,7 @@ def generate_shortest_path_data_mono(textualize,
   
   for t in range(num_tests):
     node_encoding = encode_nodes(mp.nodes, mp)
-    edge_index = torch.LongTensor([mp.src, mp.dst])
+    edge_index = torch.LongTensor([mp.src(), mp.dst()])
     data = Data(x=node_encoding, edge_index=edge_index, num_nodes=N)
     graph_file = os.path.join(graph_dir, f'{graph_count + t}.pt')
     torch.save(data, graph_file)
