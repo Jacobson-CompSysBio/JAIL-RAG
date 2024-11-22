@@ -244,6 +244,12 @@ def generate_shortest_path_data_mono(textualize,
       u = nodes.index(u)
       v = nodes.index(v)
 
+      _paths = []
+      for path in paths:
+        _path = [nodes.index(p) for p in path]
+        _paths.append(_path)
+      paths = _paths
+
     question = f'What is a shortest path between nodes {u} and {v}?'
     desc = textualize(mp)
 

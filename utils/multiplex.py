@@ -14,12 +14,14 @@ class Multiplex:
     if flist is not None:
       layer_info = pd.read_csv(flist, sep='\t', header=None)
 
+      if layer_info.shape[1] != 2:
+        raise ValueError('flist file must contain two tab-seperated columns.')
+        
       for i in layer_info.index:
         g = nx.read_edgelist(layer_info.iloc[i,0],
                              create_using=nx.Graph,
                              nodetype=str,
                              data=(('weight', float),))
-        
         self.add_layer(g, layer_info.iloc[i,1])
 
   def __len__(self):
@@ -39,6 +41,10 @@ class Multiplex:
     self._nodes.sort()
   
   def adj_matrix(self, delta: float = 0.5):
+    # Check that delta is valid
+    if delta < 0 or delta > 1:
+      raise ValueError('delta should be in [0,1]')
+    
     L = len(self)
 
     # Check if multiplex is empty
@@ -49,17 +55,13 @@ class Multiplex:
     if L == 1:
       return nx.adjacency_matrix(self.layers[0]['graph'], self._nodes)
     
-    # Check that delta is valid
-    if delta < 0 or delta > 1:
-      raise ValueError('delta should be in [0,1]')
-
     N = self.num_nodes
     eye = delta / (L-1) * sparse.identity(N, format='csr')
     
     def get_nodes_in_layer(layer_idx: int) -> list[str]:
       return [n for n in self._nodes if n in list(self.layers[layer_idx]['graph'].nodes())]
   
-    blocks = [[(1-delta) * nx.to_scipy_sparse_array(self.layers[i]['graph'], get_nodes_in_layer(0)) if l == i else eye for l in range(len(self))] for i in range(len(self))]
+    blocks = [[(1-delta) * nx.to_scipy_sparse_array(self.layers[i]['graph'], get_nodes_in_layer(0)) if l == i else eye for l in range(L)] for i in range(L)]
 
     return sparse.block_array(blocks, format='csr')
   
@@ -76,10 +78,30 @@ class Multiplex:
     """Get list of nodes"""
     return self._nodes
 
-  @property
+  def sort_edges(self, edges, nodelist) -> list:
+    sorted_edges = []
+
+    for e in edges:
+      if nodelist.index(e[0]) < nodelist.index(e[1]):
+        sorted_edges.append((e[0],e[1]))
+      else:
+        sorted_edges.append((e[1],e[0]))
+    
+    sorted_edges.sort()
+
+    return sorted_edges
+
   def src(self, layer_idx: int = -1) -> list:
+    if not isinstance(layer_idx, int):
+      raise TypeError('layer_idx must be an integer')
     if layer_idx < -1 or layer_idx >= len(self):
-      raise ValueError(f'layer_idx must be between -1 and {len(self)-1}')
+      if len(self) == 1:
+        raise ValueError('layer_idx must be -1 or 0')
+      else:
+        raise ValueError(f'layer_idx must be -1 or an integer between 0 and {len(self)-1}')
+    
+    if len(self) == 0:
+      return []
     
     edges = []
     if layer_idx == -1:
@@ -88,15 +110,18 @@ class Multiplex:
     else:
       edges += list(self.layers[layer_idx]['graph'].edges())
     
+    edges = self.sort_edges(edges, self._nodes)
     src = [e[0] for e in edges]
 
-    return [self.nodes.index(s) for s in src]
+    return [self._nodes.index(s) for s in src]
   
-  @property
   def dst(self, layer_idx: int = -1) -> list:
     if layer_idx < -1 or layer_idx >= len(self):
       raise ValueError(f'layer_idx must be between -1 and {len(self)-1}')
     
+    if len(self) == 0:
+      return []
+    
     edges = []
     if layer_idx == -1:
       for layer in self.layers:
@@ -104,6 +129,7 @@ class Multiplex:
     else:
       edges += list(self.layers[layer_idx]['graph'].edges())
     
+    edges = self.sort_edges(edges, self._nodes)
     dst = [e[1] for e in edges]
 
     return [self.nodes.index(d) for d in dst]

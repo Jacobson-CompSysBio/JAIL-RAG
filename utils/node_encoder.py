@@ -20,7 +20,7 @@ def encode_nodes(nodes_to_encode: list,
   if not isinstance(mp, Multiplex):
     raise TypeError("mp must be a Multiplex")
   if not isinstance(out_dim, Integral):
-    raise TypeError("out_dim must be ab integer")
+    raise TypeError("out_dim must be an integer")
   if out_dim <= 0:
     raise ValueError("out_dim must be positive")
   if not isinstance(base_encode_method, str):
