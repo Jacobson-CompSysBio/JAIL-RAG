@@ -3,12 +3,15 @@ import numpy as np
 from scipy import sparse
 import math
 from scipy.stats import gmean
-from utils import get_allowed_values_as_str
+from utils.utils import get_allowed_values_as_str
 
 def column_norm(X):
-  return sparse.csc_array(normalize(X, norm='l1', axis=0))
+  return sparse.csr_array(normalize(X, norm='l1', axis=0))
 
 def get_init_prob(seed: str, nodes: list, L: int) -> np.ndarray:
+  if L < 1 or not isinstance(L, int):
+    raise ValueError('L must be positive integer')
+    
   idx = nodes.index(seed)
   p = np.zeros(len(nodes))
   p[idx] = 1.0 / L
@@ -16,8 +19,8 @@ def get_init_prob(seed: str, nodes: list, L: int) -> np.ndarray:
 
 def random_walk_restart(M: sparse.csr_array,
                         p0: np.ndarray,
-                        r: float,
-                        L: int,
+                        L: int = 1,
+                        r: float = 0.7,
                         tau: None = None,
                         threshold: float = 1e-10) -> np.ndarray:
   # Check inputs
@@ -27,7 +30,7 @@ def random_walk_restart(M: sparse.csr_array,
   if threshold <= 0:
     raise ValueError('threshold must be positive')
   
-  if type(tau) is list:
+  if isinstance(tau, list):
     if len(tau) != L:
       raise ValueError('tau must contain L elements')
     if not math.isclose(np.sum(tau)/L, 1.0):
@@ -61,7 +64,10 @@ def _geometric_mean(X: np.ndarray, L: int, N: int):
   # Check inputs
   if X.shape[0] != N*L:
     raise ValueError('The number of rows in X must equak N*L')
-    
+  
+  if L == 1:
+    return X
+  
   mean = np.empty(N)
 
   for i in range(N):
@@ -75,6 +81,9 @@ def _arithemtic_mean(X: np.ndarray, L: int, N: int):
   if X.shape[0] != N*L:
     raise ValueError('The number of rows in X must equak N*L')
     
+  if L == 1:
+    return X
+  
   mean = np.empty(N)
 
   for i in range(N):
@@ -88,6 +97,9 @@ def _sum_scores(X: np.ndarray, L: int, N: int):
   if X.shape[0] != N*L:
     raise ValueError('The number of rows in X must equak N*L')
   
+  if L == 1:
+    return X
+  
   mean = np.empty(N)
 
   for i in range(N):
@@ -100,15 +112,15 @@ def rwr_encoding(seeds: str,
                  adj,
                  node_list: list,
                  L: int,
-                 restart_prob: float = 0.7,
                  mean_type: str = None,
+                 restart_prob: float = 0.7,
                  tau: None = None,
                  threshold: float = 1e-10):
   if isinstance(seeds, str):
     seeds = [seeds]
   
   # Check that all seeds are in the node_list
-  in_node_list = [ seed not in node_list for seed in seeds]
+  in_node_list = [seed not in node_list for seed in seeds]
   if sum(in_node_list) > 0:
     raise ValueError(f'Not all seeds are in the node_list')
   
@@ -129,16 +141,16 @@ def rwr_encoding(seeds: str,
 
   # Initialize encoding
   if mean_type is None:
-    P = np.empty((N, len(seeds)))
-  else:
     P = np.empty((M.shape[0], len(seeds)))
-
+  else:
+    P = np.empty((N, len(seeds)))
+  
   for j, seed in enumerate(seeds):
     # Initialize the similarity matrix
     p0 = get_init_prob(seed, node_list, L)
 
     # Perform random walk with restart until probability vector is stable
-    p_stable = random_walk_restart(M, p0, restart_prob, L, tau, threshold)
+    p_stable = random_walk_restart(M, p0, L=L, r=restart_prob, tau=tau, threshold=threshold)
 
     # Summarize the embedding values for each layer
     if L > 1 and mean_type is not None:
@@ -150,7 +162,7 @@ def rwr_encoding(seeds: str,
         p_stable = _sum_scores(p_stable, L, N)
     
     # Normalize vector
-    p_stable = p_stable / np.sum(p_stable)
+    # p_stable = p_stable / np.sum(p_stable)
 
     P[:,j] = p_stable
   
