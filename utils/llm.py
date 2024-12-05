@@ -98,7 +98,7 @@ class LLM(nn.Module):
     def forward(self, samples):
 
         # encode desc, questions, labels
-        questions = self.tokenzier(samples["question"], add_special_tokens=False)
+        questions = self.tokenizer(samples["question"], add_special_tokens=False)
         descriptions = self.tokenizer(samples["desc"], add_special_tokens=False)
         labels = self.tokenizer(samples["label"], add_special_tokens=False)
 

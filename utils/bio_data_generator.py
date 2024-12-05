@@ -349,7 +349,10 @@ def generate_data_mono(textualizer_name: str, base_dir: str, flist: str, num_tes
 
 
 if __name__ == '__main__':
-  textualizer_name = 'node_layer_attr'
+
+  # change this for different textualization types
+  textualizer_name = 'all'
+
   # output_path = '/Users/kyo/projects/JAIL-RAG/data/DREAM4_gold_standards'
   # flist = '/Users/kyo/projects/JAIL-RAG/data/DREAM4_gold_standards/mono_flist.tsv'
 

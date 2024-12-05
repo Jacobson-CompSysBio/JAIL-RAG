@@ -142,7 +142,7 @@ class GraphLLM(nn.Module):
         # encode description, questions, and labels
         questions = self.tokenizer(samples["question"], add_special_tokens=False)
         descriptions = self.tokenizer(samples["desc"], add_special_tokens=False)
-        labels = self.tokenizer(samples["labels"], add_special_tokens=False)
+        labels = self.tokenizer(samples["label"], add_special_tokens=False)
 
         # encode special tokens
         eos_tokens = self.tokenizer(EOS, add_special_tokens=False)

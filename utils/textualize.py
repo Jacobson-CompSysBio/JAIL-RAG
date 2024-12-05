@@ -19,9 +19,13 @@ def layer_attr(mp: Multiplex) -> list:
 def node_layer_attr(mp: Multiplex) -> list:
     return node_attr(mp) + layer_attr(mp)
 
+def all_attr(mp: Multiplex) -> list:
+    return textualize_edges(mp) + node_layer_attr(mp)
+
 load_textualizer = {
     'edges': textualize_edges,
     'node_attr': node_attr,
     'layer_attr': layer_attr,
-    'node_layer_attr': node_layer_attr
+    'node_layer_attr': node_layer_attr,
+    'all': all_attr
 }

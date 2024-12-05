@@ -1,3 +1,7 @@
+import sys
+
+sys.path.append('../')
+
 from utils.multiplex import Multiplex
 import pytest
 import networkx as nx
