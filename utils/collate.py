@@ -1,6 +1,6 @@
 from torch_geometric.data import Batch
 
-def collate(original_batch):
+def collate_fn(original_batch):
     # make dict to hold out batch
     batch = {}
 
