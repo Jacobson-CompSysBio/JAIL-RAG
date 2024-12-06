@@ -108,7 +108,7 @@ class GraphLLM(nn.Module):
         ).to(self.model.device)
 
         # get word embeddings - where is this coming from??
-        self.word_embedding = self.model.model.get_input_embeddings
+        self.word_embedding = self.model.model.get_input_embeddings()
 
     # property decorator allows us to call the method without any parameters, and you can assign values to it
     @property
