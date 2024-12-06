@@ -11,9 +11,9 @@ from peft import (
 )
 
 # special tokens
-BOS = '<s>[INST]'
-EOS_USER = '[/INST]'
-EOS = '</s>'
+BOS = '<|begin_of_text|>'
+EOS_USER = '<|endoftext|>'
+EOS = '<|endoftext|>'
 
 IGNORE_INDEX = -100
 

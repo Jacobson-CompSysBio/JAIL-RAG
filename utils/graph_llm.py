@@ -13,9 +13,9 @@ from peft import (
 )
 
 # define special tokens
-BOS = '<s>[INST]'
-EOS_USER = '[/INST]'
-EOS = '<s>'
+BOS = '<|begin_of_text|>'
+EOS_USER = '<|endoftext|>'
+EOS = '<|endoftext|>'
 
 # define mask token
 IGNORE_INDEX = -100
@@ -39,7 +39,7 @@ class GraphLLM(nn.Module):
                  **kwargs):
         
         super().__init__()
-        self.max_tx_len = max_txt_len
+        self.max_txt_len = max_txt_len
         self.max_new_tokens = max_new_tokens
 
         print('Loading LLaMA...')
@@ -129,7 +129,7 @@ class GraphLLM(nn.Module):
         # use graph encoder module to "compress" graph dimensions
         graphs = samples['graph']
         graphs = graphs.to(self.model.device)
-        n_embeds, _ = self.graph_encoder(graphs.x, graphs.edge_index.long(), graphs.edge_attr) # might need to change this depending on graph info we have
+        n_embeds = self.graph_encoder(graphs.x, graphs.edge_index.long())
 
         # mean pooling: reduce objects along given dimension with reduction operation
         g_embeds = scatter(n_embeds, graphs.batch, dim=0, reduce='mean')
@@ -168,7 +168,7 @@ class GraphLLM(nn.Module):
 
             # combine the label input ids with the desc, questions, and special tokens to make full string
             input_ids = descriptions.input_ids[i][:self.max_txt_len] + questions.input_ids[i] + eos_user_tokens.input_ids + label_input_ids 
-            
+
             # embed input
             inputs_embeds = self.word_embedding(torch.tensor(input_ids).to(self.model.device))
             inputs_embeds = torch.cat([bos_embeds, graph_embeds[i].unsqueeze(0), inputs_embeds], dim=0)
@@ -217,7 +217,7 @@ class GraphLLM(nn.Module):
 
         # encode graphs
         graph_embeds = self.encode_graphs(samples)
-        self.projector(graph_embeds)
+        graph_embeds = self.projector(graph_embeds)
 
         # batch processing
         batch_size = len(samples['id'])
@@ -230,7 +230,7 @@ class GraphLLM(nn.Module):
             inputs_embeds = torch.cat([bos_embeds, graph_embeds[i].unsqueeze(0), inputs_embeds], dim=0)
 
             batch_inputs_embeds.append(inputs_embeds)
-            batch_attention_mask.appen([1] * inputs_embeds.shape[0])
+            batch_attention_mask.append([1] * inputs_embeds.shape[0])
         
         # pad inputs_embeds
         max_length = max([x.shape[0] for x in batch_inputs_embeds])
@@ -239,8 +239,8 @@ class GraphLLM(nn.Module):
             batch_inputs_embeds[i] = torch.cat([pad_embeds.repeat(pad_length, 1), batch_inputs_embeds[i]])
             batch_attention_mask[i] = [0] * pad_length + batch_attention_mask[i]
 
-        input_embeds = torch.stack(batch_inputs_embeds, dim=0).to(self.model.device)
-        attention_mask = torch.stack(batch_attention_mask).to(self.model.device)
+        inputs_embeds = torch.stack(batch_inputs_embeds, dim=0).to(self.model.device)
+        attention_mask = torch.tensor(batch_attention_mask).to(self.model.device)
 
         with self.maybe_autocast():
             outputs = self.model.generate(

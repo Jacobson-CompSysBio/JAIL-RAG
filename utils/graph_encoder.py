@@ -33,7 +33,7 @@ class GCN(nn.Module):
             bn.reset_parameters()
     
     # forward pass - since these are the only trainable modules in the paper
-    def forward(self, x, adj_t, edge_attr):
+    def forward(self, x, adj_t):
 
         # loop through all convs except last
         for i, conv in enumerate(self.convs[:-1]):
@@ -46,7 +46,7 @@ class GCN(nn.Module):
         x = self.convs[-1](x, adj_t)
 
         # return input graph + edge attributes
-        return x, edge_attr
+        return x
 
 class GraphTransformer(nn.Module):
     
@@ -57,8 +57,7 @@ class GraphTransformer(nn.Module):
         self.convs = nn.ModuleList()
         self.convs.append(TransformerConv(in_channels=in_channels, 
                                           out_channels=hidden_channels//num_heads, 
-                                          heads=num_heads, 
-                                          edge_dim=in_channels, 
+                                          heads=num_heads,
                                           dropout=dropout))
         
         self.bns = nn.ModuleList()
@@ -69,14 +68,13 @@ class GraphTransformer(nn.Module):
             self.convs.append(TransformerConv(in_channels=hidden_channels,
                                               out_channels=hidden_channels//num_heads,
                                               heads=num_heads,
-                                              edge_dim=in_channels,
                                               dropout=dropout))
             self.bns.append(nn.BatchNorm1d(hidden_channels))
         
         # final transformer + drop
         self.convs.append(TransformerConv(in_channels=hidden_channels,
                                           out_channels=out_channels//num_heads,
-                                          edge_dim=in_channels,
+                                          heads=num_heads,
                                           dropout=dropout))
         self.dropout = dropout
         
@@ -86,14 +84,14 @@ class GraphTransformer(nn.Module):
         for bn in self.bns:
             bn.reset_parameters()
     
-    def forward(self, x, adj_t, edge_attr):
+    def forward(self, x, adj_t):
         for i, conv in enumerate(self.convs[:-1]):
-            x = conv(x, edge_index=adj_t, edge_attr=edge_attr)
-            x = self.bns[i]
+            x = conv(x, edge_index=adj_t)
+            x = self.bns[i](x)
             x = F.relu(x)
             x = F.dropout(x, p=self.dropout, training=self.training)
-        x = self.convs[-1](x, edge_index=adj_t, edge_attr=edge_attr)
-        return x, edge_attr
+        x = self.convs[-1](x, edge_index=adj_t)
+        return x
         
 
 class GAT():
