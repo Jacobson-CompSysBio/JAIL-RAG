@@ -178,14 +178,15 @@ class GraphLLM(nn.Module):
 
             # mask out the input graph, description, question in our labels
             label_input_ids = [IGNORE_INDEX] * (inputs_embeds.shape[0] - len(label_input_ids)) + label_input_ids 
+            batch_label_input_ids.append(label_input_ids)
 
         # pad input_embeds
         max_length = max([x.shape[0] for x in batch_inputs_embeds])
         for i in range(batch_size):
             pad_length = max_length - batch_inputs_embeds[i].shape[0]
             batch_inputs_embeds[i] = torch.cat([pad_embeds.repeat(pad_length, 1), batch_inputs_embeds[i]])
-            batch_attention_mask[i] = [0] * pad_length + batch_label_input_ids[i]
-            batch_label_input_ids[i] = [IGNORE_INDEX] * pad_length + batch_label_input_ids[i] # mask everything that's not part of the answer - we only want the model to output this 
+            batch_attention_mask[i] = [0] * pad_length + batch_attention_mask[i]
+            batch_label_input_ids[i] = [IGNORE_INDEX] * pad_length+batch_label_input_ids[i] # mask everything that's not part of the answer - we only want the model to output this 
         
         # convert lists into tensors
         inputs_embeds = torch.stack(batch_inputs_embeds, dim = 0).to(self.model.device)

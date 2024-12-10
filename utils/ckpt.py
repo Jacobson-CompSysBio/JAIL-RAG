@@ -18,13 +18,13 @@ def print_trainable_params(model):
     
     return trainable_params, all_param
 
-def _save_checkpoint(model, optimizer, cur_epoch, args, is_best=False):
+def _save_checkpoint(model, optimizer, cur_epoch, args, path, is_best=False):
     """
     Save checkpoint at the current epoch
     """
 
     # make directory if it doesn't exist
-    os.makedirs(f'{args.output_dir}/{args.dataset}', exist_ok=True)
+    os.makedirs(f'{path}', exist_ok=True)
 
     # get dict of trainable params
     param_grad_dic = {
@@ -50,6 +50,7 @@ def _save_checkpoint(model, optimizer, cur_epoch, args, is_best=False):
     # path = f'{args.output_dir}/{args.dataset}/model_name_{args.model_name}_llm_model_name_{args.llm_model_name}_'
 
     print("Saving checkpoint at epoch {} to {}.".format(cur_epoch, path))
+    path = path + f'epoch_{cur_epoch}_best.pth' if is_best else path + f'epoch_{cur_epoch}.pth'
     torch.save(save_obj, path)
 
 def _reload_best_model(model, args):
