@@ -62,7 +62,7 @@ def _reload_best_model(model, path):
     print(f"Loading checkpoint from {path}.")
 
     checkpoint = torch.load(path, map_location="cpu")
-    model.load_state_dict(checkpoint["model"])
+    model.load_state_dict(checkpoint["model"], strict=False)
 
     return model
 
