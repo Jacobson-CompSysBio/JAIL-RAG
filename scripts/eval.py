@@ -31,7 +31,7 @@ seed_everything(seed)
 
 batch_size = 1
 data_path = '../data/DREAM4_gold_standards/connections_node_label'
-model_path = '../checkpoints/test_run/epoch_5_best.pth'
+model_path = '../checkpoints/test_run/epoch_5_best.pth' # REPLACE WITH BEST MODEL PATH
 eval_path = '../logs/train/eval.json'
 
 # ----------------------------------------------------------

@@ -87,6 +87,10 @@ def eval_hit(prediction, answer):
             return 1
     return 0
 
+def eval_bio():
+    
+    pass
+
 # can add evaluation functions for tasks here
-eval_funcs = {
+eval_funcs = {"bio_data": eval_bio,
 }

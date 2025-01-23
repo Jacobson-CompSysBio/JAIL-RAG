@@ -1,7 +1,7 @@
 import networkx as nx
 import numpy as np
 import pandas as pd
-import os
+import os, sys, glob
 import torch
 from torch_geometric.data.data import Data
 
@@ -10,6 +10,9 @@ from multiplex import *
 from generate_split import generate_split
 from node_encoder import encode_nodes
 from utils import array_sampler
+
+# relative path
+sys.path.append('../')
 
 def _get_node_idx_from_pair_idx(idx: int, num_nodes: int) -> tuple:
   u = int(idx / num_nodes)
@@ -70,7 +73,7 @@ def generate_connection_data_mono(textualize,
     n_pos_tests = int(n_pos_tests / max_pairs * num_tests)
     n_neg_tests = num_tests - num_tests
 
-  data = pd.DataFrame(None, columns=['question', 'label', 'desc'])
+  data = pd.DataFrame(None, columns=['question', 'label', 'desc', 'scope'])
 
   # Add positive tests
   edges = list(mp[0]['graph'].edges())
@@ -94,7 +97,7 @@ def generate_connection_data_mono(textualize,
 
     question = f'Is there an edge between nodes {u} and {v}?'
     desc = textualize(mp)
-    label = 'yes'
+    label = ['yes']
     data.loc[len(data)] = [question, label, desc]
 
     n_tests += 1
@@ -124,7 +127,7 @@ def generate_connection_data_mono(textualize,
     
       question = f'Is there an edge between nodes {u} and {v}?'
       desc = textualize(mp)
-      label = 'no'
+      label = ['no']
       data.loc[len(data)] = [question, label, desc]
       n_tests += 1
 
@@ -176,9 +179,9 @@ def generate_path_data_mono(textualize, mp: Multiplex, num_tests: int, output_fi
       v = nodes[v_idx]
 
       if nx.has_path(mp[0]['graph'], u, v):
-        label = 'yes'
+        label = ['yes']
       else:
-        label = 'no'
+        label = ['no']
       
       question = f'Is there a path between nodes {u} and {v}?'
       desc = textualize(mp)
@@ -261,10 +264,6 @@ def generate_shortest_path_data_mono(textualize,
       label = 'There is no path'
       data.loc[len(data)] = [question, label, desc]
       n_tests_n += 1
-
-    
-
-    
   
   data = data.sample(frac=1)
 
@@ -289,75 +288,45 @@ def generate_shortest_path_data_mono(textualize,
 
   return num_tests
 
-  # nodes = mp.nodes
-  # max_pairs = _get_max_pairs(mp.num_nodes)
-
-  # if num_tests >= max_pairs:
-  #   print(f'Limiting number of shortest path tests to {max_pairs} to avoid duplication.')
-  #   num_tests = max_pairs
-
-  # pairs_idx = np.random.choice(range(max_pairs), num_tests, replace=False)
-
-  # if not os.path.isfile(output_file):
-  #   with open(output_file, "w") as fp:
-  #     fp.write('question\tlabel\tdesc\n')
-  
-  # with open(output_file, "a") as fp:
-  #   for i in pairs_idx:
-  #     u_idx, v_idx = _get_node_idx_from_pair_idx(i, mp.num_nodes)
-  #     u = nodes[u_idx]
-  #     v = nodes[v_idx]
-
-  #     if nx.has_path(mp[0]['graph'], u, v):
-  #       label = nx.shortest_path(mp[0]['graph'], u, v)
-  #     else:
-  #       label = 'There is no path'
-      
-  #     question = f'What is the shortest path between nodes {u} and {v}?'
-  #     desc = textualize(mp)
-
-  #     fp.write(f'{question}\t{label}\t{desc}\n')
-
-def generate_data_mono(textualizer_name: str, base_dir: str, flist: str, num_tests: int) -> None:
+def generate_data_mono(textualizer_name: str, base_dir: str, flist: str, num_tests: int, separate_dirs: bool = True) -> None:
   textualize = load_textualizer[textualizer_name]
   mp = Multiplex(flist)
 
   print('Generating connections data set for node_label')
-  output_dir = os.path.join(base_dir, 'connections_node_label')
+  dir = 'connections_node_label' if separate_dirs else 'all'
+  output_dir = os.path.join(base_dir, f'{dir}')
   num_tests = generate_connection_data_mono(textualize, mp, output_dir, 'train_dev.tsv')
   split_path = os.path.join(output_dir, 'split')
   generate_split(num_tests, split_path)
 
   print('Generating connections data set for node_id')
-  output_dir = os.path.join(base_dir, 'connections_node_id')
+  dir = 'connections_node_id' if separate_dirs else 'all'
+  output_dir = os.path.join(base_dir, f'{dir}')
   num_tests = generate_connection_data_mono(textualize, mp, output_dir, 'train_dev.tsv', use_node_id=True)
   split_path = os.path.join(output_dir, 'split')
   generate_split(num_tests, split_path)
 
-
   print('Generating shortest data set for node_label')
-  output_dir = os.path.join(base_dir, 'shortest_path_node_label')
+  dir = 'shortest_path_node_label' if separate_dirs else 'all'
+  output_dir = os.path.join(base_dir, f'{dir}')
   num_tests = generate_shortest_path_data_mono(textualize, mp, output_dir, 'train_dev.tsv')
   split_path = os.path.join(output_dir, 'split')
   generate_split(num_tests, split_path)
 
   print('Generating shortest data set for node_id')
-  output_dir = os.path.join(base_dir, 'shortest_path_node_id')
+  dir = 'shortest_path_node_id' if separate_dirs else 'all'
+  output_dir = os.path.join(base_dir, f'{dir}')
   num_tests = generate_shortest_path_data_mono(textualize, mp, output_dir, 'train_dev.tsv', use_node_id=True)
   split_path = os.path.join(output_dir, 'split')
   generate_split(num_tests, split_path)
-
 
 if __name__ == '__main__':
 
   # change this for different textualization types
   textualizer_name = 'all'
 
-  # output_path = '/Users/kyo/projects/JAIL-RAG/data/DREAM4_gold_standards'
-  # flist = '/Users/kyo/projects/JAIL-RAG/data/DREAM4_gold_standards/mono_flist.tsv'
-
   # CHANGE PATHS
-  output_path = '/mnt/DGX01/Personal/krusepi/codebase/projects/llms/JAIL-RAG/data/DREAM4_gold_standards'
-  flist = '/mnt/DGX01/Personal/krusepi/codebase/projects/llms/JAIL-RAG/data/DREAM4_gold_standards/mono_flist.tsv'
+  output_path = '../data/DREAM4_gold_standards'
+  flist = '../data/DREAM4_gold_standards/mono_flist.tsv'
   num_tests = 50
   generate_data_mono(textualizer_name, output_path, flist, num_tests)
