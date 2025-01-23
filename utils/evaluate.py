@@ -87,10 +87,67 @@ def eval_hit(prediction, answer):
             return 1
     return 0
 
-def eval_bio():
+def eval_connections(eval_path):
+    """
+    Evaluate node id connection output
+
+    Parameters:
+        prediction (str): predicted output
+        answer (pd.DataFrame): corresponding answer dataframe
+    Returns:
+    """
+
+    # load predictions, answers
+    predictions = pd.read_json(eval_path)
+    answers = pd.read_json(eval_path)
+
+    # extract target, scope from answer
+    targets = answers["label"]
+    scope = answers["scope"]
+
+    # normalize prediction
+    predictions = [normalize(p) for p in predictions]
+
+    # if scope is any, eval acc
+    if scope == "any":
+        # get accuracy
+        acc = eval_acc(predictions, targets)
+
+        return scope, acc
     
+    # if scope is all, eval acc, hit rate, f1
+    if scope == "all":
+        # get accuracy
+        acc = eval_acc(predictions, targets)
+
+        # get hit rate
+        hit_rate = eval_hit(predictions, targets)
+
+        # get f1
+        f1, precision, recall = eval_f1(predictions, targets)
+
+        return scope, acc, hit_rate, f1, precision, recall
+
+def eval_sp(eval_path):
+    pass
+
+def eval_all(eval_path):
+
+    # read in file
+    predictions = pd.read_csv(eval_path)
+    question_type = predictions["question_type"]
+
+    # if question type is connection
+    if question_type == "connection":
+        connections = eval_connections(eval_path)
+
+    # if question type is shortest path
+    elif question_type == "shortest_path":
+        sp = eval_sp(eval_path)
+
     pass
 
 # can add evaluation functions for tasks here
-eval_funcs = {"bio_data": eval_bio,
-}
+eval_funcs = {"eval_connections": eval_connections,
+              "eval_sp": eval_sp,
+              "eval_all": eval_all}
