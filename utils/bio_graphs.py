@@ -29,7 +29,7 @@ class BiologicalDataset(Dataset):
       'question': text['question'],
       'scope': text['scope'],
       'label': text['label'],
-      'desc': text['desc'],
+      'desc': ' ',
       'graph': graph,
     }
   
