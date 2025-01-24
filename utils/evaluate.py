@@ -1,5 +1,6 @@
 import json
 import pandas as pd
+import numpy as np
 import re
 import string
 
@@ -68,7 +69,6 @@ def eval_acc(prediction, answer):
     """
     Get % of tokens in prediction that are in answer
     """
-
     # init
     matched = 0.0
 
@@ -87,10 +87,60 @@ def eval_hit(prediction, answer):
             return 1
     return 0
 
-def eval_bio():
+def eval_connections(eval_path):
+    """
+    Evaluate node id connection accuracy
+
+    Parameters:
+        eval_path (str): path to 
+    Returns:
+        scope (str): evaluation scope; one of `any` or `all`
+        acc (float): evaluation accuracy
+    """
+
+    # load predictions, answers
+    predictions = pd.read_json(eval_path)
+    answers = pd.read_json(eval_path)
+
+    # extract target, scope from answer
+    targets = answers["label"]
+    scope = answers["scope"]
+
+    # normalize prediction
+    predictions = [normalize(p) for p in predictions]
+
+    accs = []
+
+    # loop through preds and actuals
+    for pred, actual in zip(predictions, answers):
+        acc = eval_acc(pred, actual)
+        accs.append(acc)
     
+    avg_acc = accs.mean()
+    return avg_acc
+
+    
+
+def eval_sp(eval_path):
+    pass
+
+def eval_all(eval_path):
+
+    # read in file
+    predictions = pd.read_csv(eval_path)
+    question_type = predictions["question_type"]
+
+    # if question type is connection
+    if question_type == "connection":
+        connections = eval_connections(eval_path)
+
+    # if question type is shortest path
+    elif question_type == "shortest_path":
+        sp = eval_sp(eval_path)
+
     pass
 
 # can add evaluation functions for tasks here
-eval_funcs = {"bio_data": eval_bio,
-}
+eval_funcs = {"eval_connections": eval_connections,
+              "eval_sp": eval_sp,
+              "eval_all": eval_all}
