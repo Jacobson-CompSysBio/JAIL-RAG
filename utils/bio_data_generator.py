@@ -29,6 +29,7 @@ def generate_connection_data_mono(textualize,
                                   mp: Multiplex,
                                   output_dir: str,
                                   file_name: str,
+                                  pt_obj_path: str, 
                                   use_node_id: bool = False,
                                   num_tests: int = -1,
                                   bal_pos_neg: bool = True) -> None:
@@ -48,32 +49,33 @@ def generate_connection_data_mono(textualize,
     print(f'Limiting number of connection tests to {max_pairs} to avoid duplication.')
     num_tests = max_pairs
   
-  # Calculate number of possible positive and negative tests
-  if mp.layers[0]['graph'].is_directed():
-    n_pos_tests = mp.layers[0]['graph'].number_of_edges()
-  else:
-    n_pos_tests = 2 * mp.layers[0]['graph'].number_of_edges()
 
-  print(f'{n_pos_tests} positive tests are possible')
-  
+  # Calculate number of possible positive and negative tests
+  n_pos_tests = 2 * mp.layers[0]['graph'].number_of_edges()
   n_neg_tests = max_pairs - n_pos_tests
   
   # Check if balancing positive and negative tests
   if bal_pos_neg:
+    print('Balancing positive and negative tests')
     # Check is tests can be balanced while meeting 'num_tests' requirement
     min_pos_neg = min([n_pos_tests, n_neg_tests])
-    if 2* min_pos_neg < num_tests:
+
+    if 2 * min_pos_neg > num_tests:
       print(f'Cannot balance positive and negative tests while generating {num_tests} tests.')
+      
+      min_pos_neg = int(num_tests/2)
       print(f'Reducing number of tests to {2*min_pos_neg}')
-      num_tests = 2*min_pos_neg
-      n_pos_tests = min_pos_neg
-      n_neg_tests = min_pos_neg
+
+    n_pos_tests = min_pos_neg
+    n_neg_tests = min_pos_neg
   else:
     # Reduce the number of positive and negative tests while keeping same ratio
     n_pos_tests = int(n_pos_tests / max_pairs * num_tests)
-    n_neg_tests = num_tests - num_tests
+    n_neg_tests = num_tests - n_pos_tests
 
-  data = pd.DataFrame(None, columns=['question', 'label', 'desc', 'scope'])
+  print(f'Creating {n_pos_tests} positive tests and {n_neg_tests} negative tests')
+
+  data = pd.DataFrame(None, columns=['question','scope','label','desc','graph'])
 
   # Add positive tests
   edges = list(mp[0]['graph'].edges())
@@ -97,9 +99,10 @@ def generate_connection_data_mono(textualize,
 
     question = f'Is there an edge between nodes {u} and {v}?'
     scope = 'all'
-    desc = None #textualize(mp)
     label = ['yes']
-    data.loc[len(data)] = [question, scope, label, desc]
+    desc = None #textualize(mp)
+    graph = pt_obj_path
+    data.loc[len(data)] = [question, scope, label, desc, graph]
 
     n_tests += 1
 
@@ -128,9 +131,10 @@ def generate_connection_data_mono(textualize,
     
       question = f'Is there an edge between nodes {u} and {v}?'
       scope = 'all'
-      desc = None #textualize(mp)
       label = ['no']
-      data.loc[len(data)] = [question, scope, label, desc]
+      desc = None #textualize(mp)
+      graph = pt_obj_path
+      data.loc[len(data)] = [question, scope, label, desc, graph]
       n_tests += 1
 
   data = data.sample(frac=1)
@@ -140,19 +144,19 @@ def generate_connection_data_mono(textualize,
   add_headers = not os.path.exists(output_file)
   data.to_csv(output_file, sep='\t', index=False, mode='a', header=add_headers)
 
-  graph_dir = os.path.join(output_dir, 'graphs')
-  os.makedirs(graph_dir, exist_ok=True)
-  graph_count = 0
-  for file in os.listdir(graph_dir):
-    if file.endswith('.pt'):
-      graph_count += 1
+  # graph_dir = os.path.join(output_dir, 'graphs')
+  # os.makedirs(graph_dir, exist_ok=True)
+  # graph_count = 0
+  # for file in os.listdir(graph_dir):
+  #   if file.endswith('.pt'):
+  #     graph_count += 1
   
-  for t in range(num_tests):
-    node_encoding = encode_nodes(mp.nodes, mp)
-    edge_index = torch.LongTensor([mp.src(), mp.dst()])
-    data = Data(x=node_encoding, edge_index=edge_index, num_nodes=N)
-    graph_file = os.path.join(graph_dir, f'{graph_count + t}.pt')
-    torch.save(data, graph_file)
+  # for t in range(num_tests):
+  #   node_encoding = encode_nodes(mp.nodes, mp)
+  #   edge_index = torch.LongTensor([mp.src(), mp.dst()])
+  #   data = Data(x=node_encoding, edge_index=edge_index, num_nodes=N)
+  #   graph_file = os.path.join(graph_dir, f'{graph_count + t}.pt')
+  #   torch.save(data, graph_file)
 
   return num_tests
 
@@ -342,16 +346,30 @@ if __name__ == '__main__':
   num_tests = 0
   textualize = None
 
+  graph_files = graph_files[:10]
   # Loop through each graph
-  for graph_file in graph_files:
+  for i, graph_file in enumerate(graph_files):
+    graph_file = os.path.join(base_dir, graph_file)
     flist = os.path.join(base_dir, 'mono_flist.tsv')
     with open(flist, 'w') as fp:
       fp.write(f'{graph_file}\tunknown\n')
     
     mp = Multiplex(flist)
 
+    N = mp.layers[0]['graph'].number_of_nodes()
     dir = 'all'
     output_dir = os.path.join(base_dir, f'{dir}')
-    num_tests += generate_connection_data_mono(textualize, mp, output_dir, 'train_dev.tsv')
+    graph_dir = os.path.join(output_dir, 'graphs')
+    os.makedirs(graph_dir, exist_ok=True)
+      
+    node_encoding = encode_nodes(mp.nodes, mp)
+    edge_index = torch.LongTensor([mp.src(), mp.dst()])
+    data = Data(x=node_encoding, edge_index=edge_index, num_nodes=N)
+    pt_file = os.path.join(graph_dir, f'{i}.pt')
+    torch.save(data, pt_file)
+
+    desired_test = int(mp.layers[0]['graph'].number_of_edges())
+    print(f'Desired number of tests: {desired_test}')
+    num_tests += generate_connection_data_mono(textualize, mp, output_dir, 'train_dev.tsv', pt_file, use_node_id=True, num_tests=desired_test)
   split_path = os.path.join(output_dir, 'split')
   generate_split(num_tests, split_path)
