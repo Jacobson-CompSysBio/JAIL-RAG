@@ -27,6 +27,7 @@ class BiologicalDataset(Dataset):
     return {
       'id': index,
       'question': text['question'],
+      'scope': text['scope'],
       'label': text['label'],
       'desc': text['desc'],
       'graph': graph,
