@@ -1,5 +1,6 @@
 import json
 import pandas as pd
+import numpy as np
 import re
 import string
 
@@ -68,7 +69,6 @@ def eval_acc(prediction, answer):
     """
     Get % of tokens in prediction that are in answer
     """
-
     # init
     matched = 0.0
 
@@ -89,12 +89,13 @@ def eval_hit(prediction, answer):
 
 def eval_connections(eval_path):
     """
-    Evaluate node id connection output
+    Evaluate node id connection accuracy
 
     Parameters:
-        prediction (str): predicted output
-        answer (pd.DataFrame): corresponding answer dataframe
+        eval_path (str): path to 
     Returns:
+        scope (str): evaluation scope; one of `any` or `all`
+        acc (float): evaluation accuracy
     """
 
     # load predictions, answers
@@ -108,25 +109,17 @@ def eval_connections(eval_path):
     # normalize prediction
     predictions = [normalize(p) for p in predictions]
 
-    # if scope is any, eval acc
-    if scope == "any":
-        # get accuracy
-        acc = eval_acc(predictions, targets)
+    accs = []
 
-        return scope, acc
+    # loop through preds and actuals
+    for pred, actual in zip(predictions, answers):
+        acc = eval_acc(pred, actual)
+        accs.append(acc)
     
-    # if scope is all, eval acc, hit rate, f1
-    if scope == "all":
-        # get accuracy
-        acc = eval_acc(predictions, targets)
+    avg_acc = accs.mean()
+    return avg_acc
 
-        # get hit rate
-        hit_rate = eval_hit(predictions, targets)
-
-        # get f1
-        f1, precision, recall = eval_f1(predictions, targets)
-
-        return scope, acc, hit_rate, f1, precision, recall
+    
 
 def eval_sp(eval_path):
     pass
