@@ -346,7 +346,6 @@ if __name__ == '__main__':
   num_tests = 0
   textualize = None
 
-  graph_files = graph_files[:10]
   # Loop through each graph
   for i, graph_file in enumerate(graph_files):
     graph_file = os.path.join(base_dir, graph_file)
@@ -368,7 +367,7 @@ if __name__ == '__main__':
     pt_file = os.path.join(graph_dir, f'{i}.pt')
     torch.save(data, pt_file)
 
-    desired_test = int(mp.layers[0]['graph'].number_of_edges())
+    desired_test = int(mp.layers[0]['graph'].number_of_edges() / 3)
     print(f'Desired number of tests: {desired_test}')
     num_tests += generate_connection_data_mono(textualize, mp, output_dir, 'train_dev.tsv', pt_file, use_node_id=True, num_tests=desired_test)
   split_path = os.path.join(output_dir, 'split')
