@@ -44,9 +44,7 @@ class GraphLLM(nn.Module):
 
         print('Loading LLaMA...')
         kwargs = {
-            "max_memory": {0: '80GiB', 1: '80GiB'}, # do we need this?
             "device_map": "auto",
-            "revision": "main"
         }
 
         # create tokenizer
