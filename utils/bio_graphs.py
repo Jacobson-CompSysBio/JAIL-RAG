@@ -20,7 +20,7 @@ class BiologicalDataset(Dataset):
   
   def __getitem__(self, index: int):
     text = self.text.iloc[index]
-    graph = torch.load(text['graph'])
+    graph = torch.load(text['graph'], weights_only=False)
     graph.x = torch.tensor(graph.x.T, dtype=torch.float32)
     graph.edge_index = graph.edge_index.type(torch.int64)
 
