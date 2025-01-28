@@ -1,9 +1,10 @@
-from .multiplex import *
+from multiplex import *
 
 def textualize_edges(mp: Multiplex) -> list:
     text = []
     for layer in mp:
-        text += [f'{e[0]} is associated with {e[1]}' for e in layer['graph'].edges(data=True)]
+        # text += [f'{e[0]} is associated with {e[1]}' for e in layer['graph'].edges(data=True)]
+        text += [f'node {e[0]} is connected to node {e[1]}' for e in layer['graph'].edges()]
     return text
 
 def node_attr(mp: Multiplex) -> list:

@@ -100,7 +100,7 @@ def generate_connection_data_mono(textualize,
     question = f'Is there an edge between nodes {u} and {v}?'
     scope = 'all'
     label = ['yes']
-    desc = None #textualize(mp)
+    desc =  textualize(mp)
     graph = pt_obj_path
     data.loc[len(data)] = [question, scope, label, desc, graph]
 
@@ -132,7 +132,7 @@ def generate_connection_data_mono(textualize,
       question = f'Is there an edge between nodes {u} and {v}?'
       scope = 'all'
       label = ['no']
-      desc = None #textualize(mp)
+      desc =  textualize(mp)
       graph = pt_obj_path
       data.loc[len(data)] = [question, scope, label, desc, graph]
       n_tests += 1
@@ -144,10 +144,12 @@ def generate_connection_data_mono(textualize,
   add_headers = not os.path.exists(output_file)
   data.to_csv(output_file, sep='\t', index=False, mode='a', header=add_headers)
 
+  return n_pos_tests + n_neg_tests
+
 if __name__ == '__main__':
 
   # change this for different textualization types
-  textualizer_name = 'all'
+  textualizer_name = 'edges'
 
   # CHANGE PATHS
   base_dir = '../data/subgraphs'
@@ -157,7 +159,7 @@ if __name__ == '__main__':
 
   # Init number of tests
   num_tests = 0
-  textualize = None
+  textualize = load_textualizer[textualizer_name]
 
   # Loop through each graph
   for i, graph_file in enumerate(graph_files):
