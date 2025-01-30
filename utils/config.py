@@ -26,7 +26,7 @@ def parse_args_llama():
     parser.add_argument("--grad_steps", type=int, default=2)
 
     # learning rate scheduler
-    parser.add_argument("--num_epochs", type=int, default=10)
+    parser.add_argument("--num_epochs", type=int, default=1)
     parser.add_argument("--warmup_epochs", type=int, default=1)
 
     # inference
