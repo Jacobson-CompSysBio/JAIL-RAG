@@ -100,7 +100,7 @@ def generate_connection_data_mono(textualize,
     question = f'Is there an edge between nodes {u} and {v}?'
     scope = 'all'
     label = ['yes']
-    desc =  textualize(mp)
+    desc =  ' '
     graph = pt_obj_path
     data.loc[len(data)] = [question, scope, label, desc, graph]
 

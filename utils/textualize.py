@@ -1,7 +1,7 @@
 import sys, os
 sys.path.append('../')
 
-from utils.multiplex import *
+from multiplex import *
 
 def textualize_edges(mp: Multiplex) -> list:
     text = []
