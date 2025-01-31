@@ -9,7 +9,7 @@ import torch.nn as nn
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset, Subset
 from torch.distributed import init_process_group, destroy_process_group
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy, MixedPrecision
 import torch.distributed as dist
 from importlib import reload
 from torch_scatter import scatter
@@ -43,6 +43,18 @@ args = parse_args_llama()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # ---------------------------------------------------------
+## SETUP FUNCTIONS
+
+# set up fsdp
+def fsdp_setup():
+    init_process_group(backend='nccl')
+    torch.cuda.set_device(int(os.environ['LOCAL_RANK']))
+
+# clean up fsdp
+def cleanup():
+    dist.destroy_process_group()
+
+# ---------------------------------------------------------
 ## LOAD DATA
 
 # get dataset
@@ -56,7 +68,7 @@ val_dataset = Subset(dataset, idx_split['val'])
 test_dataset = Subset(dataset, idx_split['test'])
 
 # ---------------------------------------------------------
-## DATALOADERS
+## DATALOADERS + FSDP
 
 seed_everything(seed)
 
@@ -97,6 +109,13 @@ model = GraphLLM(max_text_len=T,
                  llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
                  llm_frozen='True',
                  revision="main") # args are defaulted in the class
+
+# wrap model with FSDP (args from: https://www.osc.edu/resources/getting_started/howto/howto_pytorch_fully_sharded_data_parallel_fsdp)
+model = FSDP(model,
+             mixed_precision=MixedPrecision(param_dtype=torch.bfloat16),
+             sharding_strategy=ShardingStrategy.FULL_SHARD,
+             use_orig_params=True,
+             device_id=torch.cuda.current_device())
 
 # options
 num_training_steps = args.num_epochs * len(train_loader)
@@ -164,11 +183,3 @@ for epoch in range(args.num_epochs):
 
 torch.cuda.empty_cache()
 torch.cuda.reset_max_memory_allocated()
-
-# ---------------------------------------------------------
-# EVALUATION
-
-# # test inference on one batch
-# batch = next(iter(test_loader))
-# out = model.inference(batch)
-# print(out)
