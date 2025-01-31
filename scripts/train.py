@@ -9,7 +9,7 @@ import torch.nn as nn
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset, Subset
 from torch.distributed import init_process_group, destroy_process_group
-from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 import torch.distributed as dist
 from importlib import reload
 from torch_scatter import scatter
@@ -55,31 +55,10 @@ val_dataset = Subset(dataset, idx_split['val'])
 test_dataset = Subset(dataset, idx_split['test'])
 
 # ---------------------------------------------------------
-## SET UP DDP / DATALOADERS
-ddp = int(os.environ.get('RANK', -1)) != -1
-if ddp:
-    assert torch.cuda.is_available(), "DDP requires CUDA"
-    init_process_group(backend='nccl')
-    ddp_rank = int(os.environ['RANK']) # each gpu has a different 'rank'
-    ddp_local_rank = int(os.environ['LOCAL_RANK']) # only used in a multi-node setting
-    ddp_world_size = int(os.environ['WORLD_SIZE']) # num. processes running (8 for us)
-    device = f'cuda:{ddp_local_rank}' # specify device with local rank
-    torch.cuda.set_device(device)
-    master_process = ddp_rank == 0 # process 0 does logging, checkpointing, etc.
-else:
-    # vanilla, non-DDP run
-    ddp_rank = 0
-    ddp_local_rank = 0
-    ddp_world_size = 1
-    master_process = True
-
-    # attempt to auto-detect device
-    device = "cpu"
-    if torch.cuda.is_available():
-        device = GetLowestGPU()
-    elif hasattr(torch.backends, "mps"):
-        device = "mps"
-    print(f"using device: {device}")
+## SET UP FSDP / DATALOADERS
+dist.init_process_group(backend='nccl') # or 'gloo'
+local_rank = int(os.environ['LOCAL_RANK'])
+torch.cuda.set_device(local_rank)
 
 seed_everything(seed)
 
@@ -120,15 +99,13 @@ model = GraphLLM(max_text_len=T,
                  llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
                  llm_frozen='True',
                  revision="main") # args are defaulted in the class
+model.to(local_rank)
+model = FSDP(model)
 
 # use_compile option to compile beforehand
 use_compile = False
 if use_compile:
     model = torch.compile(model)
-
-if ddp:
-    model = DDP(model, device_ids=[ddp_local_rank])
-raw_model = model.module if ddp else model # unwrapped model
 
 # options
 num_training_steps = args.num_epochs * len(train_loader)
@@ -151,16 +128,11 @@ for epoch in range(args.num_epochs):
     epoch_loss, accum_loss = 0., 0.
 
     for step, batch in enumerate(train_loader):
-
+        batch = {k: v.to(local_rank) for k, v in batch.items()}
         optimizer.zero_grad()
-        with torch.autocast(device_type=device, dtype=torch.bfloat16):
-            loss = model(batch)
-        if ddp:
-            model.require_backward_grad_sync = ((step + 1) % args.grad_steps == 0)
         loss.backward()
 
-        if ddp:
-            dist.all_reduce(loss, op = dist.ReduceOp.AVG)
+        loss = dist.all_reduce(loss, op=dist.ReduceOp.AVG)
 
         # clip gradients so large changes don't occur - super small clipping too
         clip_grad_norm_(optimizer.param_groups[0]['params'], 0.1)
@@ -172,9 +144,8 @@ for epoch in range(args.num_epochs):
         epoch_loss += loss.item()
         accum_loss += loss.item()
 
-        if ddp:
-            dist.all_reduce(accum_loss, op = dist.ReduceOp.AVG)
-            dist.all_reduce(epoch_loss, op=dist.ReduceOp.AVG)
+        dist.all_reduce(accum_loss, op = dist.ReduceOp.AVG)
+        dist.all_reduce(epoch_loss, op=dist.ReduceOp.AVG)
 
         optimizer.step() # update weights
 

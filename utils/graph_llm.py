@@ -44,7 +44,6 @@ class GraphLLM(nn.Module):
 
         print('Loading LLaMA...')
         kwargs = {
-            "device_map": "auto",
             "revision": "main"
         }
 
