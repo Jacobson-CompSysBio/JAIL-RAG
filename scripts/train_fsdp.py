@@ -41,6 +41,7 @@ def fsdp_setup():
     dist.init_process_group(backend='nccl')
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
+    return local_rank
 
 # clean up fsdp
 def fsdp_cleanup():
@@ -49,16 +50,14 @@ def fsdp_cleanup():
 # ---------------------------------------------------------
 ## CONFIG
 seed = 42
-T = 512
-B = 4
-
-# set up
-fsdp_setup()
+T = 256
+B = 2
 
 # args from config.py
 args = parse_args_llama()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+# set up fsdp
 local_rank = fsdp_setup()
 
 # ---------------------------------------------------------
@@ -103,11 +102,6 @@ test_loader = DataLoader(test_dataset,
 # ---------------------------------------------------------
 ## TRAINING
 
-# change precision
-mixed_precision_policy = MixedPrecision(param_dtype=torch.float16,  
-                                        reduce_dtype=torch.float16,  
-                                        buffer_dtype=torch.float16)
-
 model = GraphLLM(max_text_len=T,
                  max_max_new_tokens=32,
                  max_memory=[80, 80],
@@ -115,6 +109,7 @@ model = GraphLLM(max_text_len=T,
                  llm_frozen='True',
                  revision="main",
                  fsdp=True) # args are defaulted in the class
+model.half()
 
 # Set mixed precision policy if desired
 mixed_precision_policy = MixedPrecision(
@@ -127,7 +122,10 @@ mixed_precision_policy = MixedPrecision(
 model.to(local_rank)
 
 # Wrap the model with FSDP
-model = FSDP(model, mixed_precision=mixed_precision_policy)
+model = FSDP(model, 
+             mixed_precision=mixed_precision_policy,
+             use_orig_params=True,
+             cpu_offload=True)
 
 # options
 num_training_steps = args.num_epochs * len(train_loader)
@@ -139,7 +137,7 @@ save_path = '../checkpoints/graph_llm_no_text/'
 # set optimizer
 params = [p for _, p in model.named_parameters() if p.requires_grad] # only update non-frozen params (graph encoder)
 optimizer = torch.optim.AdamW(
-    [{'params': params, 'lr': args.lr, 'weight_decay': args.wd}, ],
+    [{'params': params, 'lr': args.lr, 'weight_decay': args.wd},],
     betas=(0.9, 0.95)
 )
 
@@ -148,6 +146,7 @@ for epoch in range(args.num_epochs):
 
     model.train()
     epoch_loss, accum_loss = 0., 0.
+    train_sampler.set_epoch(epoch)
 
     for step, batch in enumerate(train_loader):
         optimizer.zero_grad()
