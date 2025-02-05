@@ -36,16 +36,22 @@ class GraphLLM(nn.Module):
                  gnn_num_layers: int = 4,
                  gnn_dropout: float = 0.0,
                  gnn_num_heads: int = 4,
+                 fsdp: bool = False,
                  **kwargs):
         
         super().__init__()
         self.max_txt_len = max_txt_len
         self.max_new_tokens = max_new_tokens
 
-        print('Loading LLaMA...')
-        kwargs = {
-            "revision": "main"
-        }
+        print("Loading LLaMA...")
+
+        if fsdp:
+            kwargs = {"revision": "main"}
+        else:
+            kwargs = {
+                "revision": "main",
+                "device_map": "auto"
+            }
 
         # create tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(llm_model_path, 
