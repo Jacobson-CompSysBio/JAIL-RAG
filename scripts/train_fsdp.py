@@ -10,14 +10,12 @@ import torch
 import torch.nn as nn
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset, Subset
-import torch.distributed as dist
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, MixedPrecision
-from torch.utils.data.distributed import DistributedSampler
-import torch.distributed as dist
 from importlib import reload
 from torch_scatter import scatter
 from transformers import pipeline
 from DGXutils import GetLowestGPU
+from accelerate import Accelerator
+from accelerate.utils import DistributedDataParallelKwargs, DeepSpeedPlugin
 
 sys.path.append('../')
 
@@ -35,38 +33,26 @@ from utils.collate import collate_fn
 from utils.seed import seed_everything
 from utils.lr_schedule import adjust_learning_rate
 
-# ----------------
-## SETUP FUNCTIONS
-# ----------------
-def fsdp_setup():
-    if not dist.is_initialized():
-        dist.init_process_group(backend='nccl',
-                                init_method='env://')
-    local_rank = int(os.environ["LOCAL_RANK"])
-    global_rank = int(os.environ["RANK"])
-    world_size = int(os.environ["WORLD_SIZE"])
-
-    torch.cuda.set_device(local_rank)
-    return local_rank, global_rank, world_size
-
-# clean up fsdp
-def fsdp_cleanup():
-    if dist.is_initialized():
-        dist.barrier()
-        dist.destroy_process_group()
-
 def main():
     # -------
     ## CONFIG
     # -------
-    local_rank, global_rank, world_size = fsdp_setup()
-
     args = parse_args_llama()
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     seed_everything(42)
 
-    if global_rank == 0:
-        print(f"Running FSDP training on {world_size} GPUs.")
+    # accelerate setup
+    fsdp_config = {
+        "reshard_after_forward": True,
+        "min_num_params": 1e8,
+    }
+
+    accelerator = Accelerator(
+        mixed_precision = "fp16",
+        gradient_accumulation_steps=args.grad_steps,
+    )
+
+    accelerator.print(f"Initialized accelerator with FSDP")
 
     # ------------
     ## DATALOADERS
@@ -79,48 +65,27 @@ def main():
     train_dataset = Subset(dataset, idx_split['train'])
     val_dataset = Subset(dataset, idx_split['val'])
 
-    # Use DistributedSampler so each GPU gets its share of the data.
-    train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=global_rank, shuffle=True)
-    val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=global_rank, shuffle=False)
-
     # make dataloaders
     B = 2
     train_loader = DataLoader(train_dataset, 
                             batch_size=B,
-                            sampler=train_sampler,
-                            collate_fn=collate_fn)
+                            collate_fn=collate_fn,
+                            shuffle=True)
 
     val_loader = DataLoader(val_dataset, 
                             batch_size=B,
-                            sampler=val_sampler,
-                            collate_fn=collate_fn)
+                            collate_fn=collate_fn,
+                            shuffle=False)
 
     # -----------
     ## MODEL INIT
     # -----------
-    T = 256
+    T = 512
     model = GraphLLM(max_text_len=T,
                     max_max_new_tokens=32,
                     llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
-                    llm_frozen=True,
-                    fsdp=True).to(local_rank) # args are defaulted in the class
-    
-    mixed_precision_policy = MixedPrecision(
-        param_dtype=torch.float16,
-        reduce_dtype=torch.float16,
-        buffer_dtype=torch.float16,)
-
-    # load graph enc + projector separately
-    model.graph_encoder = FSDP(model.graph_encoder,
-                               mixed_precision=mixed_precision_policy,
-                               use_orig_params=False,
-                               device_id=local_rank)
-
-    model.projector = FSDP(model.projector,
-                           mixed_precision=mixed_precision_policy,
-                           use_orig_params=False,
-                           device_id=local_rank)
-    
+                    llm_frozen=False # set frozen to false so we can train with RL
+                    ) # args are defaulted in the class
 
     # --------------------
     ## OPTIMIZER & OPTIONS
@@ -128,6 +93,15 @@ def main():
     # set optimizer
     params = [p for _, p in model.named_parameters() if p.requires_grad] # only update non-frozen params (graph encoder)
     optimizer = torch.optim.AdamW(params, lr=args.lr, weight_decay=args.wd, betas=(0.9, 0.95))
+
+    model, optimizer, train_loader, val_loader = accelerator.prepare(
+        model, optimizer, train_loader, val_loader
+    )
+
+    # enable grad checkpointing for additional mem savings
+    if hasattr(model.model, "gradient_checkpointing_enable"):
+        model.model.gradient_checkpointing_enable()
+        accelerator.print("Enabled gradient checkpointing for HF model.")
 
     # options
     num_training_steps = args.num_epochs * len(train_loader)
@@ -139,57 +113,48 @@ def main():
     ## TRAIN LOOP
     for epoch in range(args.num_epochs):
         model.train()
-        train_sampler.set_epoch(epoch)
         epoch_loss = 0.0
 
         for step, batch in enumerate(train_loader):
-            optimizer.zero_grad()
-            # Move all tensors in the batch to the correct device using non_blocking transfers.
-            batch = {k: (v.to(local_rank, non_blocking=True) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
-            loss = model(batch)
-            loss.backward()
-            clip_grad_norm_(optimizer.param_groups[0]['params'], 0.1)
-            
-            # grad steps is a hyprparameter
-            if (step + 1) % args.grad_steps == 0:
-                adjust_learning_rate(optimizer.param_groups[0], args.lr, step / len(train_loader) + epoch, args)
+            # grad accumulation
+            with accelerator.accumulate(model):
+                loss = model(batch)
+                accelerator.backward(loss)
+                clip_grad_norm_(optimizer.param_groups[0]['params'], 0.1)
                 optimizer.step()
+                optimizer.zero_grad()
             epoch_loss += loss.item()
             progress_bar.update(1)
+            adjust_learning_rate(optimizer.param_groups[0], args.lr, step / len(train_loader) + epoch, args)
         
         # validation
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for batch in enumerate(val_loader):
-                batch = {k: (v.to(local_rank, non_blocking=True) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
+            for batch in val_loader:
                 loss = model(batch)
                 val_loss += loss.item()
-            val_loss /= len(val_loader)
+        val_loss /= len(val_loader)
+
+        accelerator.print(f"Epoch {epoch}/{args.num_epochs} | "
+                    f"Train Loss: {epoch_loss / len(train_loader):.4f} | "
+                    f"Validation Loss: {val_loss:.4f} | "
+                    f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}", 
+                    end="\r")
         
-        if global_rank ==0 and val_loss < best_val_loss:
+        if val_loss < best_val_loss:
             best_val_loss = val_loss
-            _save_checkpoint(model, optimizer, epoch, args, save_path, is_best=True)
             best_epoch = epoch
-        
-        # Print training status (each process prints; you might want to limit this to rank 0)
-        if global_rank == 0:
-            print(f"Epoch {epoch}/{args.num_epochs} | Train Loss: {epoch_loss / len(train_loader):.4f} | "
-                f"Validation Loss: {val_loss:.4f} | Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}", end="\r")
-            
+            # only main process saves model
+            if accelerator.is_main_process:
+                _save_checkpoint(model, optimizer, epoch, args, save_path, is_best=True)
+
         # Early stopping if needed
         if epoch - best_epoch >= args.patience:
-            if dist.get_rank() == 0:
-                print(f"\nEarly stopping at epoch {epoch}")
+            accelerator.print(f"\nEarly stopping at epoch {epoch}")
             break
-
-        # clear cache
-        torch.cuda.empty_cache()
-
-    # --------
-    ## CLEANUP
-    # --------
-    fsdp_cleanup()
+    
+    accelerator.print("Training Complete")
 
 if __name__ == '__main__':
     main()
