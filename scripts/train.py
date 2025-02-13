@@ -35,8 +35,8 @@ from utils.lr_schedule import adjust_learning_rate
 # ---------------------------------------------------------
 ## CONFIG
 seed = 42
-T = 512
-B = 4
+T = 256
+B = 8
 
 # args from config.py
 args = parse_args_llama()
@@ -161,6 +161,7 @@ for epoch in range(args.num_epochs):
     if epoch - best_epoch >= args.patience:
         print(f"Early stopping at epoch {epoch}")
         break
+    torch.cuda.empty_cache()
 
 torch.cuda.empty_cache()
 torch.cuda.reset_max_memory_allocated()
