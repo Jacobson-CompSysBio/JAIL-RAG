@@ -106,14 +106,23 @@ def main():
     progress_bar = tqdm.tqdm(range(num_training_steps), disable=not accelerator.is_main_process)
     best_val_loss = float('inf')
     best_epoch = 0
-    # log_path = '../logs/graph_llm_no_text/'
-    save_path = '../checkpoints/graph_llm_no_text/'
+    save_path = '../checkpoints/graph_llm_fsdp/'
+    log_path = '../logs/graph_llm_fsdp/'
 
     ## TRAIN LOOP
+    if accelerator.is_main_process:
+        if not os.path.exists(log_path):
+            os.makedirs(log_path)
+        log = os.path.join(log_path, 'log.txt')
+        with open(log, 'w') as f:
+            f.write("epoch,train_loss,val_loss\n")
+    
+    iter_num = 0
     for epoch in range(args.num_epochs):
         model.train()
         epoch_loss = 0.0
 
+        # backprop
         for step, batch in enumerate(train_loader):
             # grad accumulation
             with accelerator.accumulate(model):
@@ -125,7 +134,8 @@ def main():
             epoch_loss += loss.item()
             progress_bar.update(1)
             adjust_learning_rate(optimizer.param_groups[0], args.lr, step / len(train_loader) + epoch, args)
-        
+        train_loss = epoch_loss / len(train_loader)
+
         # validation
         model.eval()
         val_loss = 0.0
@@ -135,18 +145,27 @@ def main():
                 val_loss += loss.item()
         val_loss /= len(val_loader)
 
+        # print epoch stats
         accelerator.print(f"Epoch {epoch}/{args.num_epochs} | "
                     f"Train Loss: {epoch_loss / len(train_loader):.4f} | "
                     f"Validation Loss: {val_loss:.4f} | "
                     f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}", 
                     end="\r")
         
+        # save checkpoint if best val loss
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch
             accelerator.wait_for_everyone()
-            unwrapped_model = accelerator.unwrap_model(model)
-            _save_checkpoint(unwrapped_model, optimizer, save_path, epoch, best_val_loss, args)
+            if accelerator.is_main_process:
+                unwrapped_model = accelerator.unwrap_model(model)
+                _save_checkpoint(unwrapped_model, optimizer, save_path, epoch, best_val_loss, args)
+        
+        # checkpoint and save to log
+        if accelerator.is_main_process:
+            with open(log, 'a') as f:
+                f.write(f"{epoch},{iter_num},{train_loss},{val_loss}\n")
+
 
         # Early stopping if needed
         if epoch - best_epoch >= args.patience:
