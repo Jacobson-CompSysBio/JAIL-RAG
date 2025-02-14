@@ -8,8 +8,10 @@ import transformers
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 import torch
 import torch.nn as nn
+from torch.nn.modules.batchnorm import _BatchNorm
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader, Dataset, Subset
+from torch.distributed.fsdp import MixedPrecision, FullyShardedDataParallel as FSDP
 from importlib import reload
 from torch_scatter import scatter
 from transformers import pipeline
@@ -33,6 +35,23 @@ from utils.collate import collate_fn
 from utils.seed import seed_everything
 from utils.lr_schedule import adjust_learning_rate
 
+# ----------------
+## SETUP FUNCTIONS
+# ----------------
+def gnn_auto_wrap_policy(module, recurse, unwrapped_params=None, **kwargs):
+    if isinstance(module, _BatchNorm):
+        return False
+    # if module is your gnn submodule, do not auto‐wrap it
+    if module.__class__.__name__ == "GraphEncoder":
+        return True
+    # wrap all other modules
+    return False
+
+def recast_module_to_fp32(module: torch.nn.Module):
+    module.float()
+    for name, child in module.named_children():
+        recast_module_to_fp32(child)
+
 def main():
     # -------
     ## CONFIG
@@ -40,18 +59,11 @@ def main():
     args = parse_args_llama()
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     seed_everything(42)
-
-    # accelerate setup
-    fsdp_config = {
-        "reshard_after_forward": True,
-        "min_num_params": 1e8,
-    }
-
+    
     accelerator = Accelerator(
-        mixed_precision = "fp16",
-        gradient_accumulation_steps=args.grad_steps,
+        mixed_precision=None,
+        gradient_accumulation_steps=args.grad_steps,  # or args.grad_steps
     )
-
     accelerator.print(f"Initialized accelerator with FSDP")
 
     # ------------
@@ -81,8 +93,8 @@ def main():
     ## MODEL INIT
     # -----------
     T = 512
-    model = GraphLLM(max_text_len=T,
-                    max_max_new_tokens=32,
+    model = GraphLLM(max_txt_len=T,
+                    max_new_tokens=32,
                     llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
                     llm_frozen=False # set frozen to false so we can train with RL
                     ) # args are defaulted in the class
@@ -105,8 +117,9 @@ def main():
 
     # options
     num_training_steps = args.num_epochs * len(train_loader)
-    progress_bar = tqdm.tqdm(range(num_training_steps))
+    progress_bar = tqdm.tqdm(range(num_training_steps), disable=not accelerator.is_main_process)
     best_val_loss = float('inf')
+    best_epoch = 0
     # log_path = '../logs/graph_llm_no_text/'
     save_path = '../checkpoints/graph_llm_no_text/'
 
@@ -145,9 +158,9 @@ def main():
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch
-            # only main process saves model
-            if accelerator.is_main_process:
-                _save_checkpoint(model, optimizer, epoch, args, save_path, is_best=True)
+            accelerator.wait_for_everyone()
+            unwrapped_model = accelerator.unwrap_model(model)
+            _save_checkpoint(unwrapped_model, optimizer, save_path, epoch, best_val_loss, args)
 
         # Early stopping if needed
         if epoch - best_epoch >= args.patience:
