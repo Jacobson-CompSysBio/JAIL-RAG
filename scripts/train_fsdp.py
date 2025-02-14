@@ -82,7 +82,8 @@ def main():
     model = GraphLLM(max_txt_len=T,
                     max_new_tokens=32,
                     llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
-                    llm_frozen=False # set frozen to false so we can train with RL
+                    llm_frozen=False, # set frozen to false so we can train with RL
+                    fsdp=True, 
                     ) # args are defaulted in the class
 
     # --------------------
@@ -159,7 +160,7 @@ def main():
             accelerator.wait_for_everyone()
             if accelerator.is_main_process:
                 unwrapped_model = accelerator.unwrap_model(model)
-                _save_checkpoint(unwrapped_model, optimizer, save_path, epoch, best_val_loss, args)
+                _save_checkpoint(unwrapped_model, optimizer, epoch, args, save_path, is_best=True)
         
         # checkpoint and save to log
         if accelerator.is_main_process:

@@ -151,9 +151,9 @@ class GraphLLM(nn.Module):
             projector = self.projector.to(self.device)
         # keep ops in fp32, not half
         with torch.amp.autocast('cuda', enabled=False):
-            n_embeds = graph_encoder["graph_encoder"](x, graphs.edge_index.long())
+            n_embeds = graph_encoder(x, graphs.edge_index.long())
             g_embeds = scatter(n_embeds, graphs.batch, dim=0, reduce='mean')
-            g_embeds = projector["projector"](g_embeds.float())
+            g_embeds = projector(g_embeds.float())
         return g_embeds
 
     def forward(self, samples):
@@ -209,11 +209,16 @@ class GraphLLM(nn.Module):
             outputs = self.model(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
-                labels=label_input_ids
+                labels=label_input_ids,
+                use_cache=False
             )
         return outputs.loss
     
     def inference(self, samples):
+
+        # Encode graph.
+        graph_embeds = self.encode_graphs(samples)
+        
         with self.maybe_autocast(dtype=torch.float16):
             questions = self.tokenizer(samples["question"], add_special_tokens=False)
             descriptions = self.tokenizer(samples["desc"], add_special_tokens=False)
@@ -222,8 +227,6 @@ class GraphLLM(nn.Module):
             batch_size = len(samples['id'])
             batch_inputs_embeds = []
             batch_attention_mask = []
-            # Encode graph.
-            graph_embeds = self.encode_graphs(samples)
             
             for i in range(batch_size):
                 input_ids = (
@@ -233,7 +236,7 @@ class GraphLLM(nn.Module):
                 )
                 input_ids_tensor = torch.tensor(input_ids, device=self.model.device)
                 inputs_embeds = self.word_embedding(input_ids_tensor)
-                sample_embeds = torch.cat([self.bos_embeds.unsqueeze(0),
+                sample_embeds = torch.cat([self.bos_embeds,
                                            graph_embeds[i].unsqueeze(0),
                                            inputs_embeds], dim=0)
                 batch_inputs_embeds.append(sample_embeds)

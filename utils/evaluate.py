@@ -13,16 +13,26 @@ def normalize(s: str) -> str:
 
     # remove punctuation
     exclude = set(string.punctuation)
-    s = "".join(char for char in s if char not in exclude)
+
+    ans = ''.join(re.findall(r"<answer>(.*?)</answer>", s))
+    think = ''.join(re.findall(r"<think>(.*?)</think>", s))
+
+    ans = "".join(char for char in ans if char not in exclude)
+    think = "".join(char for char in think if char not in exclude)
 
     # remove articles
-    s = re.sub(r"\b(a|an|the)\b", " ", s)
+    ans = re.sub(r"\b(a|an|the)\b", " ", ans)
+    think = re.sub(r"\b(a|an|the)\b", " ", think)
 
     # remove padding
     # NOTE: WE WILL NEED TO CHANGE THE PAD TOKEN DEPENDING ON THE MODEL
-    s = re.sub(r"\b(<pad>)\b", " ", s)
-    s = " ".join(s.split())
-    return s
+    ans = re.sub(r"\b(<pad>)\b", " ", ans)
+    ans = " ".join(ans.split())
+
+    think = re.sub(r"\b(<pad>)\b", " ", think)
+    think = " ".join(think.split())
+
+    return ans, think
 
 def match(s1: str, s2: str) -> bool:
     """
