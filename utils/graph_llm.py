@@ -3,7 +3,7 @@ import contextlib
 import torch
 import torch.nn as nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, MixedPrecision
-from torch.cuda.amp import autocast as autocast
+from torch.amp import autocast as autocast
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from torch_scatter import scatter
 from .graph_encoder import load_gnn_model
@@ -44,11 +44,18 @@ class GraphLLM(nn.Module):
         self.max_txt_len = max_txt_len
         self.max_new_tokens = max_new_tokens
 
-        # set up tokenizer and llm
-        kwargs = {
-            "revision": "main",
-            # "device_map": "auto"
-        }
+        if fsdp:
+            # set up tokenizer and llm
+            kwargs = {
+                "revision": "main",
+            }
+        else:
+            # set up tokenizer and llm
+            kwargs = {
+                "revision": "main",
+                "device_map": "auto"
+            }
+
         # create tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(llm_model_path, 
                                                        use_fast=False, 
@@ -83,7 +90,6 @@ class GraphLLM(nn.Module):
             )
             model = get_peft_model(model, config)
             print("Training with Lora")
-    
         self.model = model
 
         # Register constant embeddings (computed once) as buffers.
@@ -94,21 +100,24 @@ class GraphLLM(nn.Module):
             pad_id = torch.tensor(self.tokenizer.pad_token_id)
             self.register_buffer("pad_embeds", self.model.model.get_input_embeddings()(pad_id).unsqueeze(0))
 
-        # load graph encoder component - load_gnn_model function is from GraphEncoder.py 
-        self.graph_encoder = load_gnn_model[gnn_model_name](
-            in_channels = gnn_in_dim,
-            out_channels = gnn_hidden_dim,
-            hidden_channels = gnn_hidden_dim,
-            num_layers = gnn_num_layers,
-            dropout = gnn_dropout,
+        # store gnn + proj as submodules so they're not touched by accelerate
+        graph_encoder = load_gnn_model[gnn_model_name](
+            in_channels=gnn_in_dim,
+            out_channels=gnn_hidden_dim,
+            hidden_channels=gnn_hidden_dim,
+            num_layers=gnn_num_layers,
+            dropout=gnn_dropout,
             num_heads=gnn_num_heads
-        )
-        # add MLP to project graph encoder output to match llm input
-        self.projector = nn.Sequential(
+        ).float()
+        projector = nn.Sequential(
             nn.Linear(gnn_hidden_dim, 2048),
             nn.Sigmoid(),
             nn.Linear(2048, 4096)
-        )
+        ).float()
+        self._fp32_modules = {
+            "graph_encoder": graph_encoder,
+            "projector": projector,
+        }
 
         # get word embeddings - where is this coming from??
         self.word_embedding = self.model.model.get_input_embeddings()
@@ -127,16 +136,25 @@ class GraphLLM(nn.Module):
             return contextlib.nullcontext() # return a context manager if autocast off
     
     def encode_graphs(self, samples):
-        # Assume samples['graph'] is a graph data object.
         graphs = samples['graph'].to(self.model.device)
-        with self.maybe_autocast(dtype=torch.float16):
-            n_embeds = self.graph_encoder(graphs.x, graphs.edge_index.long())
-            # Use mean pooling.
+        x = graphs.x.float()  # ensure FP32 input
+
+        graph_encoder = self._fp32_modules["graph_encoder"].to(self.device)
+        projector = self._fp32_modules["projector"].to(self.device)
+
+        # Disable autocast so that these operations run in FP32.
+        with torch.amp.autocast('cuda', enabled=False):
+            n_embeds = self._fp32_modules["graph_encoder"](x, graphs.edge_index.long())
             g_embeds = scatter(n_embeds, graphs.batch, dim=0, reduce='mean')
-            g_embeds = self.projector(g_embeds)
+            g_embeds = self._fp32_modules["projector"](g_embeds.float())
+        # Return FP32 embeddings (convert to FP16 later if needed)
         return g_embeds
 
     def forward(self, samples):
+
+        # encode graphs first to avoid FP16 issues
+        graph_embeds = self.encode_graphs(samples)  # Expected shape: [batch_size, embed_dim]
+
         with self.maybe_autocast(dtype=torch.float16):
             # Tokenize texts for the batch.
             questions = self.tokenizer(samples["question"], add_special_tokens=False)
@@ -144,9 +162,6 @@ class GraphLLM(nn.Module):
             labels = self.tokenizer(samples["label"], add_special_tokens=False)
             eos_tokens = self.tokenizer(EOS, add_special_tokens=False)
             eos_user_tokens = self.tokenizer(EOS_USER, add_special_tokens=False)
-
-            # Encode graphs once for the batch.
-            graph_embeds = self.encode_graphs(samples)  # Expected shape: [batch_size, embed_dim]
 
             batch_size = len(samples['id'])
             batch_inputs_embeds = []
@@ -251,10 +266,3 @@ class GraphLLM(nn.Module):
                 trainable_params += num_params
         
         return f"Trainable parameters: {trainable_params} | Total parameters: {all_param} | {(trainable_params / all_param):.2%} trainable "
-
-
-
-
-
-
-        
