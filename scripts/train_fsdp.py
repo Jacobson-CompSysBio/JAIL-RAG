@@ -38,20 +38,6 @@ from utils.lr_schedule import adjust_learning_rate
 # ----------------
 ## SETUP FUNCTIONS
 # ----------------
-def gnn_auto_wrap_policy(module, recurse, unwrapped_params=None, **kwargs):
-    if isinstance(module, _BatchNorm):
-        return False
-    # if module is your gnn submodule, do not auto‐wrap it
-    if module.__class__.__name__ == "GraphEncoder":
-        return True
-    # wrap all other modules
-    return False
-
-def recast_module_to_fp32(module: torch.nn.Module):
-    module.float()
-    for name, child in module.named_children():
-        recast_module_to_fp32(child)
-
 def main():
     # -------
     ## CONFIG
@@ -62,7 +48,7 @@ def main():
     
     accelerator = Accelerator(
         mixed_precision=None,
-        gradient_accumulation_steps=args.grad_steps,  # or args.grad_steps
+        gradient_accumulation_steps=args.grad_steps,
     )
     accelerator.print(f"Initialized accelerator with FSDP")
 
@@ -78,7 +64,7 @@ def main():
     val_dataset = Subset(dataset, idx_split['val'])
 
     # make dataloaders
-    B = 2
+    B = 8
     train_loader = DataLoader(train_dataset, 
                             batch_size=B,
                             collate_fn=collate_fn,

@@ -43,8 +43,9 @@ class GraphLLM(nn.Module):
         super().__init__()
         self.max_txt_len = max_txt_len
         self.max_new_tokens = max_new_tokens
+        self.fsdp = fsdp
 
-        if fsdp:
+        if self.fsdp:
             # set up tokenizer and llm
             kwargs = {
                 "revision": "main",
@@ -114,11 +115,14 @@ class GraphLLM(nn.Module):
             nn.Sigmoid(),
             nn.Linear(2048, 4096)
         ).float()
-        self._fp32_modules = {
-            "graph_encoder": graph_encoder,
-            "projector": projector,
-        }
-
+        if self.fsdp:
+            self._fp32_modules = {
+                "graph_encoder": graph_encoder,
+                "projector": projector,
+            }
+        else:
+            self.graph_encoder = graph_encoder
+            self.projector = projector
         # get word embeddings - where is this coming from??
         self.word_embedding = self.model.model.get_input_embeddings()
 
@@ -137,17 +141,19 @@ class GraphLLM(nn.Module):
     
     def encode_graphs(self, samples):
         graphs = samples['graph'].to(self.model.device)
-        x = graphs.x.float()  # ensure FP32 input
-
-        graph_encoder = self._fp32_modules["graph_encoder"].to(self.device)
-        projector = self._fp32_modules["projector"].to(self.device)
-
-        # Disable autocast so that these operations run in FP32.
+        x = graphs.x.float()
+        # get gnn and projector
+        if self.fsdp:
+            graph_encoder = self._fp32_modules["graph_encoder"].to(self.device)
+            projector = self._fp32_modules["projector"].to(self.device)
+        else:
+            graph_encoder = self.graph_encoder.to(self.device)
+            projector = self.projector.to(self.device)
+        # keep ops in fp32, not half
         with torch.amp.autocast('cuda', enabled=False):
-            n_embeds = self._fp32_modules["graph_encoder"](x, graphs.edge_index.long())
+            n_embeds = graph_encoder["graph_encoder"](x, graphs.edge_index.long())
             g_embeds = scatter(n_embeds, graphs.batch, dim=0, reduce='mean')
-            g_embeds = self._fp32_modules["projector"](g_embeds.float())
-        # Return FP32 embeddings (convert to FP16 later if needed)
+            g_embeds = projector["projector"](g_embeds.float())
         return g_embeds
 
     def forward(self, samples):
