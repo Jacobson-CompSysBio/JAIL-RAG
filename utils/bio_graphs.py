@@ -29,7 +29,7 @@ class BiologicalDataset(Dataset):
       'question': text['question'],
       'scope': text['scope'],
       'label': text['label'],
-      'desc': 'You will be given a biological graph and a question. Provide an answer of YES of NO based on the question and the given input graph. Surround your answer in <answer> and </answer> tags. Surround any reasoning with <think> and </think> tags.',
+      'desc': 'You will be given a biological graph and a question. Provide an answer of YES of NO based on the question and the given input graph. Explain your reasoning, and surround it with with <think> and </think> tags. Then provide an answer, surrounded in <answer> and </answer> tags. ',
       'graph': graph,
     }
   
