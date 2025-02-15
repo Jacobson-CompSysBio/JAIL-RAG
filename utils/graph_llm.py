@@ -110,6 +110,7 @@ class GraphLLM(nn.Module):
             dropout=gnn_dropout,
             num_heads=gnn_num_heads
         ).float()
+
         projector = nn.Sequential(
             nn.Linear(gnn_hidden_dim, 2048),
             nn.Sigmoid(),

@@ -47,7 +47,6 @@ def main():
     seed_everything(42)
     
     accelerator = Accelerator(
-        mixed_precision=None,
         gradient_accumulation_steps=args.grad_steps,
     )
     accelerator.print(f"Initialized accelerator with FSDP")
@@ -64,7 +63,7 @@ def main():
     val_dataset = Subset(dataset, idx_split['val'])
 
     # make dataloaders
-    B = 8
+    B = 4
     train_loader = DataLoader(train_dataset, 
                             batch_size=B,
                             collate_fn=collate_fn,
@@ -78,9 +77,9 @@ def main():
     # -----------
     ## MODEL INIT
     # -----------
-    T = 512
+    T = 1024
     model = GraphLLM(max_txt_len=T,
-                    max_new_tokens=32,
+                    max_new_tokens=512,
                     llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
                     llm_frozen=False, # set frozen to false so we can train with RL
                     fsdp=True, 
@@ -133,6 +132,7 @@ def main():
                 optimizer.step()
                 optimizer.zero_grad()
             epoch_loss += loss.item()
+            iter_num += 1
             progress_bar.update(1)
             adjust_learning_rate(optimizer.param_groups[0], args.lr, step / len(train_loader) + epoch, args)
         train_loss = epoch_loss / len(train_loader)

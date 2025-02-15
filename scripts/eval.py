@@ -27,7 +27,7 @@ from utils.seed import seed_everything
 # -------
 # OPTIONS
 # -------
-verbose = False
+verbose = True
 seed = 42
 seed_everything(seed)
 
@@ -59,7 +59,7 @@ base = GraphLLM(max_text_len=512,
                      max_max_new_tokens=32,
                      max_memory=[80, 80],
                      llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
-                     llm_frozen='True',
+                     llm_frozen=True,
                      revision="main") # args are defaulted in the class
 
 model = _reload_best_model(base, model_path)
