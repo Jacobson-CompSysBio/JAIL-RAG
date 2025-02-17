@@ -116,6 +116,7 @@ class GraphLLM(nn.Module):
             nn.Sigmoid(),
             nn.Linear(2048, 4096)
         ).float()
+        
         if self.fsdp:
             self._fp32_modules = {
                 "graph_encoder": graph_encoder,
@@ -145,11 +146,11 @@ class GraphLLM(nn.Module):
         x = graphs.x.float()
         # get gnn and projector
         if self.fsdp:
-            graph_encoder = self._fp32_modules["graph_encoder"].to(self.device)
-            projector = self._fp32_modules["projector"].to(self.device)
+            graph_encoder = self._fp32_modules["graph_encoder"]
+            projector = self._fp32_modules["projector"]
         else:
-            graph_encoder = self.graph_encoder.to(self.device)
-            projector = self.projector.to(self.device)
+            graph_encoder = self.graph_encoder
+            projector = self.projector
         # keep ops in fp32, not half
         with torch.amp.autocast('cuda', enabled=False):
             n_embeds = graph_encoder(x, graphs.edge_index.long())

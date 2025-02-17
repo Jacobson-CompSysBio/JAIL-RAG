@@ -29,7 +29,7 @@ class BiologicalDataset(Dataset):
       'question': text['question'],
       'scope': text['scope'],
       'label': text['label'],
-      'desc': 'You will be given a biological graph and a question. Provide an answer of YES of NO based on the question and the given input graph. Explain your reasoning, and surround it with with <think> and </think> tags. Then provide an answer, surrounded in <answer> and </answer> tags. ',
+      'desc': 'A question with a yes/no answer is provided along with a biological graph. The task is to answer the question based on the graph. Provide reasoning, inside of <think></think> tags, and the answer inside of <answer></answer> tags.',
       'graph': graph,
     }
   
@@ -45,4 +45,3 @@ class BiologicalDataset(Dataset):
       test_indices = [int(line.strip()) for line in file]
 
     return {'train': train_indices, 'val': val_indices, 'test': test_indices}
-

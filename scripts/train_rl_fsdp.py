@@ -44,7 +44,6 @@ def main():
     # -------
     args = parse_args_llama()
     seed_everything(42)
-    os.environ['TOKENIZERS_PARALLELISM'] = 'false'
     
     accelerator = Accelerator(
         gradient_accumulation_steps=args.grad_steps,
@@ -63,31 +62,36 @@ def main():
     val_dataset = Subset(dataset, idx_split['val'])
 
     # make dataloaders
-    B = 8
+    B = 1
     train_loader = DataLoader(train_dataset, 
                             batch_size=B,
                             collate_fn=collate_fn,
-                            shuffle=True,
-                            num_workers=4,
-                            pin_memory=True)
+                            shuffle=True)
 
     val_loader = DataLoader(val_dataset, 
                             batch_size=B,
                             collate_fn=collate_fn,
-                            shuffle=False,
-                            num_workers=4,
-                            pin_memory=True)
+                            shuffle=False)
 
     # -----------
     ## MODEL INIT
     # -----------
     T = 256
     model = GraphLLM(max_txt_len=T,
-                    max_new_tokens=512,
+                    max_new_tokens=128,
                     llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
                     llm_frozen=False, # set frozen to false so we can train with RL
                     fsdp=True, 
                     ) # args are defaulted in the class
+    
+    # --------
+    # RL SETUP
+    # --------
+    epsilon = 0.2
+    max_grad_norm = 0.1
+
+    def compute_rewards(batch, action)
+
 
     # --------------------
     ## OPTIMIZER & OPTIONS
@@ -99,9 +103,6 @@ def main():
     model, optimizer, train_loader, val_loader = accelerator.prepare(
         model, optimizer, train_loader, val_loader
     )
-
-    for name, module in model._fp32_modules.items():
-        model._fp32_modules[name] = module.to(accelerator.device)
 
     # enable grad checkpointing for additional mem savings
     if hasattr(model.model, "gradient_checkpointing_enable"):
@@ -157,21 +158,16 @@ def main():
         accelerator.print(f"Epoch {epoch}/{args.num_epochs} | "
                     f"Train Loss: {epoch_loss / len(train_loader):.4f} | "
                     f"Validation Loss: {val_loss:.4f} | "
-                    f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}")
+                    f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}", 
+                    end="\r")
         
-        # Save checkpoint if we have a new best validation loss
+        # save checkpoint if best val loss
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch
-            # Ensure that non‑main processes wait until the main process finishes saving
-            with accelerator.main_process_first():
-                with torch.no_grad():
-                    unwrapped_model = accelerator.unwrap_model(model)
-                    _save_checkpoint(unwrapped_model, optimizer, epoch, args, save_path, is_best=True)
-                # Explicitly delete to free memory
-                del unwrapped_model
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+            if accelerator.is_main_process:
+                unwrapped_model = accelerator.unwrap_model(model)
+                _save_checkpoint(unwrapped_model, optimizer, epoch, args, save_path, is_best=True)
         accelerator.wait_for_everyone()
 
         # checkpoint and save to log
@@ -180,7 +176,7 @@ def main():
                 f.write(f"{epoch},{iter_num},{train_loss},{val_loss}\n")
 
         # clear cached mem
-        torch.cuda.empty_cache()
+        torch.cuda.clear_cache()
 
         # Early stopping if needed
         if epoch - best_epoch >= args.patience:

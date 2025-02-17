@@ -33,7 +33,7 @@ seed_everything(seed)
 
 batch_size = 1
 data_path = '../data/subgraphs/all'
-model_path = '../checkpoints/graph_llm_fsdp/epoch_1_best.pth' # REPLACE WITH BEST MODEL PATH
+model_path = '../checkpoints/graph_llm_fsdp/epoch_2_best.pth' # REPLACE WITH BEST MODEL PATH
 eval_path = '../logs/eval/graph_llm_fsdp/'
 
 # --------------------
@@ -77,32 +77,33 @@ model.eval()
 n_correct = 0
 i = 0
 # loop through dataloader
-for batch in tqdm(loader):
-    out = model.inference(batch)
-    pred = out['pred']
-    actual = out['label']
-    # test accuracy
-    for p, a in zip(pred, actual):
-        p_ans, p_think = normalize(p)
-        a = str(a)
-        if verbose:
-            print(p_think)
-            print(p_ans)
-            print(a)
-            print()
-        if a in p_ans:
-            n_correct += 1
+with torch.no_grad():
+    for batch in tqdm(loader):
+        out = model.inference(batch)
+        pred = out['pred']
+        actual = out['label']
+        # test accuracy
+        for p, a in zip(pred, actual):
+            p_ans, p_think = normalize(p)
+            a = str(a)
             if verbose:
-                print("Correct!")
+                print(p_think)
+                print(p_ans)
+                print(a)
                 print()
-        else:
-            if verbose:
-                print("Incorrect :(")
-                print()
-        i += 1
-    print(f"Accuracy: {n_correct/i:.2%} | {n_correct}/{i}", end='\r')
-acc = n_correct / i
-print(f"Accuracy: {acc:.2%} | {n_correct}/{i}")
+            if a in p_ans:
+                n_correct += 1
+                if verbose:
+                    print("Correct!")
+                    print()
+            else:
+                if verbose:
+                    print("Incorrect :(")
+                    print()
+            i += 1
+        print(f"Accuracy: {n_correct/i:.2%} | {n_correct}/{i}", end='\r')
+    acc = n_correct / i
+    print(f"Accuracy: {acc:.2%} | {n_correct}/{i}")
 
 # ------------------
 # PRINT EXAMPLE EVAL
@@ -111,8 +112,8 @@ with open(f'{eval_path}/eval.csv', 'w') as f:
     f.write("actual,prediction,reasoning")
     rand_idx = torch.randint(0, len(test_dataset), (1,)).item()
     example_batch = test_dataset[rand_idx]
-    
-    out = model.inference(batch)
+    with torch.no_grad():
+        out = model.inference(example_batch)
     pred = out['pred']
     actual = out['label']
     for p, a in zip(pred, actual):

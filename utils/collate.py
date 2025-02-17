@@ -1,3 +1,4 @@
+import torch
 from torch_geometric.data import Batch
 
 def collate_fn(original_batch):

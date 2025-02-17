@@ -1,5 +1,7 @@
-import os
+import os,sys
 import torch
+
+sys.path.append('../')
 
 # trainable parms fn. to check if frozen
 def print_trainable_params(model):
