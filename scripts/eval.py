@@ -1,6 +1,6 @@
 import os, sys
 import wandb
-from tqdm.notebook import tqdm
+from tqdm.auto import tqdm
 import transformers
 import torch
 import torch.nn as nn
@@ -27,14 +27,14 @@ from utils.seed import seed_everything
 # -------
 # OPTIONS
 # -------
-verbose = True
+verbose = False
 seed = 42
 seed_everything(seed)
 
-batch_size = 8
+batch_size = 64
 data_path = '../data/subgraphs/all'
-model_path = '../checkpoints/graph_llm_fsdp/epoch_2_best.pth' # REPLACE WITH BEST MODEL PATH
-eval_path = '../logs/eval/graph_llm_fsdp/'
+model_path = '../checkpoints/graph_llm_fsdp' # REPLACE WITH BEST MODEL PATH
+eval_path = '../logs/eval/graph_llm_fsdp'
 
 # --------------------
 # DATASET / DATALOADER
@@ -62,18 +62,20 @@ base = GraphLLM(max_text_len=256,
                 llm_frozen=True,
                 fsdp=False,
                 revision="main") # args are defaulted in the class
-model = base
-# model = _reload_best_model(base, model_path)
+
+# unwrap model
+model = accelerator.unwrap_model(base)
+model = model.load_state_dict(torch.load(model_path))
 
 # --------
 # EVALUATE
 # --------
 # set to eval
-
+model.eval()
 
 n_correct = 0
 i = 0
-pbar = tqdm(total=len(loader))
+pbar = tqdm(total=len(test_dataset))
 
 # loop through dataloader
 with torch.no_grad():
@@ -81,28 +83,25 @@ with torch.no_grad():
         out = model.inference(batch)
         pred = out['pred']
         actual = out['label']
-        # test accuracy
+
+        # Process the batch predictions. Using a simple loop here since normalization involves string operations.
         for p, a in zip(pred, actual):
             p_ans, p_think = normalize(p)
-            a = str(a)
             if verbose:
                 print(p_think)
                 print(p_ans)
                 print(a)
                 print()
-            if a in p_ans:
+                if str(a) in p_ans:
+                    print("Correct!\n")
+                else:
+                    print("Incorrect :(\n")
+            if str(a) in p_ans:
                 n_correct += 1
-                if verbose:
-                    print("Correct!")
-                    print()
-            else:
-                if verbose:
-                    print("Incorrect :(")
-                    print()
-            i += 1
-            pbar.update(1)
-            break
-        print(f"Accuracy: {n_correct/i:.2%} | {n_correct}/{i}", end='\r')
+        i += len(pred)
+        pbar.update(len(pred))
+pbar.close()
+
 acc = n_correct / i
 print(f"Accuracy: {acc:.2%} | {n_correct}/{i}")
 

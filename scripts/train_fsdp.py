@@ -73,14 +73,14 @@ def main():
                             batch_size=B,
                             collate_fn=collate_fn,
                             shuffle=True,
-                            num_workers=4,
+                            num_workers=16,
                             pin_memory=True)
 
     val_loader = DataLoader(val_dataset, 
                             batch_size=B,
                             collate_fn=collate_fn,
                             shuffle=False,
-                            num_workers=4,
+                            num_workers=16,
                             pin_memory=True)
 
     # -----------
@@ -88,8 +88,8 @@ def main():
     # -----------
     T = 256
     model = GraphLLM(max_txt_len=T,
-                    max_new_tokens=512,
-                    llm_model_path='meta-llama/Meta-Llama-3-70B-Instruct',
+                    max_new_tokens=32,
+                    llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
                     llm_frozen=False, # set frozen to false so we can train with RL
                     fsdp=True, 
                     ) # args are defaulted in the class
@@ -140,7 +140,7 @@ def main():
                 accelerator.backward(loss)
                 clip_grad_norm_(optimizer.param_groups[0]['params'], 0.1)
                 optimizer.step()
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)
             epoch_loss += loss.item()
             iter_num += 1
             progress_bar.update(1)
@@ -166,15 +166,11 @@ def main():
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch
-            accelerator.save_model(model, save_path)
 
         # checkpoint and save to log
         if accelerator.is_main_process:
             with open(log, 'a') as f:
                 f.write(f"{epoch},{iter_num},{train_loss},{val_loss}\n")
-
-        # clear cached mem
-        torch.cuda.empty_cache()
 
         # Early stopping if needed
         if epoch - best_epoch >= args.patience:
@@ -182,6 +178,7 @@ def main():
             accelerator.end_training()
             break
     
+    accelerator.save_model(model, save_path, safe_serialization=False)
     accelerator.end_training()
     accelerator.print("Training Complete")
 
