@@ -42,6 +42,12 @@ def main():
     # -------
     ## CONFIG
     # -------
+    # set paths
+    data_path = '../data/subgraphs/all'
+    save_path = '../checkpoints/graph_llm_fsdp/'
+    log_path = '../logs/graph_llm_fsdp/'
+
+    # other config
     args = parse_args_llama()
     seed_everything(42)
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
@@ -54,7 +60,6 @@ def main():
     # ------------
     ## DATALOADERS
     # ------------
-    data_path = '../data/subgraphs/all'
     dataset = BiologicalDataset(data_path)
     idx_split = dataset.get_idx_split()
 
@@ -84,7 +89,7 @@ def main():
     T = 256
     model = GraphLLM(max_txt_len=T,
                     max_new_tokens=512,
-                    llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
+                    llm_model_path='meta-llama/Meta-Llama-3-70B-Instruct',
                     llm_frozen=False, # set frozen to false so we can train with RL
                     fsdp=True, 
                     ) # args are defaulted in the class
@@ -113,8 +118,6 @@ def main():
     progress_bar = tqdm.tqdm(range(num_training_steps), disable=not accelerator.is_main_process)
     best_val_loss = float('inf')
     best_epoch = 0
-    save_path = '../checkpoints/graph_llm_fsdp/'
-    log_path = '../logs/graph_llm_fsdp/'
 
     ## TRAIN LOOP
     if accelerator.is_main_process:
@@ -163,16 +166,7 @@ def main():
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch
-            # Ensure that non‑main processes wait until the main process finishes saving
-            with accelerator.main_process_first():
-                with torch.no_grad():
-                    unwrapped_model = accelerator.unwrap_model(model)
-                    _save_checkpoint(unwrapped_model, optimizer, epoch, args, save_path, is_best=True)
-                # Explicitly delete to free memory
-                del unwrapped_model
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-        accelerator.wait_for_everyone()
+            accelerator.save_model(model, save_path)
 
         # checkpoint and save to log
         if accelerator.is_main_process:
@@ -184,8 +178,11 @@ def main():
 
         # Early stopping if needed
         if epoch - best_epoch >= args.patience:
-            accelerator.print(f"\nEarly stopping at epoch {epoch}")
+            accelerator.print(f"\nEarly stopping at epoch {epoch}...")
+            accelerator.end_training()
             break
+    
+    accelerator.end_training()
     accelerator.print("Training Complete")
 
 if __name__ == '__main__':

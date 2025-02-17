@@ -33,7 +33,7 @@ seed_everything(seed)
 
 batch_size = 1
 data_path = '../data/subgraphs/all'
-model_path = '../checkpoints/graph_llm_fsdp/epoch_2_best.pth' # REPLACE WITH BEST MODEL PATH
+model_path = '../checkpoints/graph_llm_fsdp/epoch_4_best.pth' # REPLACE WITH BEST MODEL PATH
 eval_path = '../logs/eval/graph_llm_fsdp/'
 
 # --------------------
@@ -56,11 +56,12 @@ test_loader = DataLoader(test_dataset,
 # LOAD MODEL
 # ----------
 base = GraphLLM(max_text_len=512,
-                     max_max_new_tokens=32,
-                     max_memory=[80, 80],
-                     llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
-                     llm_frozen=True,
-                     revision="main") # args are defaulted in the class
+                max_max_new_tokens=32,
+                max_memory=[80, 80],
+                llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
+                llm_frozen=True,
+                fsdp=True,
+                revision="main") # args are defaulted in the class
 
 model = _reload_best_model(base, model_path)
 
@@ -76,34 +77,37 @@ model.eval()
 
 n_correct = 0
 i = 0
+pbar = tqdm(total=len(loader))
+
 # loop through dataloader
-with torch.no_grad():
-    for batch in tqdm(loader):
-        out = model.inference(batch)
-        pred = out['pred']
-        actual = out['label']
-        # test accuracy
-        for p, a in zip(pred, actual):
-            p_ans, p_think = normalize(p)
-            a = str(a)
+for batch in loader:
+    out = model.inference(batch)
+    pred = out['pred']
+    actual = out['label']
+    # test accuracy
+    for p, a in zip(pred, actual):
+        p_ans, p_think = normalize(p)
+        a = str(a)
+        if verbose:
+            print(p_think)
+            print(p_ans)
+            print(a)
+            print()
+        if a in p_ans:
+            n_correct += 1
             if verbose:
-                print(p_think)
-                print(p_ans)
-                print(a)
+                print("Correct!")
                 print()
-            if a in p_ans:
-                n_correct += 1
-                if verbose:
-                    print("Correct!")
-                    print()
-            else:
-                if verbose:
-                    print("Incorrect :(")
-                    print()
-            i += 1
-        print(f"Accuracy: {n_correct/i:.2%} | {n_correct}/{i}", end='\r')
-    acc = n_correct / i
-    print(f"Accuracy: {acc:.2%} | {n_correct}/{i}")
+        else:
+            if verbose:
+                print("Incorrect :(")
+                print()
+        i += 1
+        pbar.update(1)
+        break
+    print(f"Accuracy: {n_correct/i:.2%} | {n_correct}/{i}", end='\r')
+acc = n_correct / i
+print(f"Accuracy: {acc:.2%} | {n_correct}/{i}")
 
 # ------------------
 # PRINT EXAMPLE EVAL
