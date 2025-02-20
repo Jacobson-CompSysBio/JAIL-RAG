@@ -83,15 +83,6 @@ def main():
                     llm_frozen=False, # set frozen to false so we can train with RL
                     fsdp=True, 
                     ) # args are defaulted in the class
-    
-    # --------
-    # RL SETUP
-    # --------
-    epsilon = 0.2
-    max_grad_norm = 0.1
-
-    def compute_rewards(batch, action)
-
 
     # --------------------
     ## OPTIMIZER & OPTIONS

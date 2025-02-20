@@ -129,8 +129,8 @@ def main():
     
     iter_num = 0
     for epoch in range(args.num_epochs):
-
-        accelerator.print("backprop...")
+        
+        accelerator.print(f"Epoch {epoch}/{args.num_epochs}")
         model.train()
         epoch_loss = 0.0
         # backprop
@@ -146,7 +146,6 @@ def main():
             progress_bar.update(1)
             adjust_learning_rate(optimizer.param_groups[0], args.lr, step / len(train_loader) + epoch, args)
         train_loss = epoch_loss / len(train_loader)
-        accelerator.print("finished backprop...")
 
         accelerator.print("validating...")
         # validation
@@ -157,7 +156,6 @@ def main():
                 loss = model(batch)
                 val_loss += loss.item()
         val_loss /= len(val_loader)
-        accelerator.print("finished validation...")
 
         # print epoch stats
         accelerator.print(f"Epoch {epoch}/{args.num_epochs} | "
@@ -165,26 +163,24 @@ def main():
                     f"Validation Loss: {val_loss:.4f} | "
                     f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}")
         
-        accelerator.print("updating best val loss...")
         # Save checkpoint if we have a new best validation loss
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch
+            accelerator.save_model(model, save_path, safe_serialization=False)
 
-        accelerator.print("saving logs...")
         # checkpoint and save to log
         if accelerator.is_main_process:
             with open(log, 'a') as f:
                 f.write(f"{epoch},{iter_num},{train_loss},{val_loss}\n")
         
-        accelerator.print("checking early stopping...")
         # Early stopping if needed
         if epoch - best_epoch >= args.patience:
             accelerator.print(f"\nEarly stopping at epoch {epoch}...")
             accelerator.end_training()
             break
     
-    accelerator.save_model(model, save_path, safe_serialization=False)
+    
     accelerator.end_training()
     accelerator.print("Training Complete")
 
