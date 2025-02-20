@@ -135,9 +135,6 @@ def main():
         epoch_loss = 0.0
         # backprop
         for step, batch in enumerate(train_loader):
-            # grad accumulation
-            if epoch == 5:
-                accelerator.print("accumulating grads...")
             with accelerator.accumulate(model):
                 loss = model(batch)
                 accelerator.backward(loss)
@@ -147,47 +144,45 @@ def main():
             epoch_loss += loss.item()
             iter_num += 1
             progress_bar.update(1)
-            if epoch == 5:
-                accelerator.print("adjusting lr...")
             adjust_learning_rate(optimizer.param_groups[0], args.lr, step / len(train_loader) + epoch, args)
         train_loss = epoch_loss / len(train_loader)
         accelerator.print("finished backprop...")
 
-        # accelerator.print("starting validation...")
-        # # validation
-        # model.eval()
-        # val_loss = 0.0
-        # with torch.no_grad():
-        #     for batch in val_loader:
-        #         loss = model(batch)
-        #         val_loss += loss.item()
-        # val_loss /= len(val_loader)
-        # accelerator.print("finished validation...")
+        accelerator.print("validating...")
+        # validation
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for batch in val_loader:
+                loss = model(batch)
+                val_loss += loss.item()
+        val_loss /= len(val_loader)
+        accelerator.print("finished validation...")
 
-        # # print epoch stats
-        # accelerator.print(f"Epoch {epoch}/{args.num_epochs} | "
-        #             f"Train Loss: {epoch_loss / len(train_loader):.4f} | "
-        #             f"Validation Loss: {val_loss:.4f} | "
-        #             f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}")
+        # print epoch stats
+        accelerator.print(f"Epoch {epoch}/{args.num_epochs} | "
+                    f"Train Loss: {epoch_loss / len(train_loader):.4f} | "
+                    f"Validation Loss: {val_loss:.4f} | "
+                    f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}")
         
-        # accelerator.print("updating best val loss...")
-        # # Save checkpoint if we have a new best validation loss
-        # if val_loss < best_val_loss:
-        #     best_val_loss = val_loss
-        #     best_epoch = epoch
+        accelerator.print("updating best val loss...")
+        # Save checkpoint if we have a new best validation loss
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_epoch = epoch
 
-        # accelerator.print("saving logs...")
-        # # checkpoint and save to log
-        # if accelerator.is_main_process:
-        #     with open(log, 'a') as f:
-        #         f.write(f"{epoch},{iter_num},{train_loss},{val_loss}\n")
+        accelerator.print("saving logs...")
+        # checkpoint and save to log
+        if accelerator.is_main_process:
+            with open(log, 'a') as f:
+                f.write(f"{epoch},{iter_num},{train_loss},{val_loss}\n")
         
-        # accelerator.print("checking early stopping...")
-        # # Early stopping if needed
-        # if epoch - best_epoch >= args.patience:
-        #     accelerator.print(f"\nEarly stopping at epoch {epoch}...")
-        #     accelerator.end_training()
-        #     break
+        accelerator.print("checking early stopping...")
+        # Early stopping if needed
+        if epoch - best_epoch >= args.patience:
+            accelerator.print(f"\nEarly stopping at epoch {epoch}...")
+            accelerator.end_training()
+            break
     
     accelerator.save_model(model, save_path, safe_serialization=False)
     accelerator.end_training()
