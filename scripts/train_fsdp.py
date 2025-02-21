@@ -5,6 +5,7 @@ import sys
 import wandb
 import tqdm.auto as tqdm
 import transformers
+from datetime import timedelta
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 import torch
 import torch.nn as nn
@@ -17,7 +18,7 @@ from torch_scatter import scatter
 from transformers import pipeline
 from DGXutils import GetLowestGPU
 from accelerate import Accelerator
-from accelerate.utils import DistributedDataParallelKwargs, DeepSpeedPlugin
+from accelerate.utils import DistributedDataParallelKwargs, DeepSpeedPlugin, InitProcessGroupKwargs
 
 sys.path.append('../')
 
@@ -51,9 +52,12 @@ def main():
     args = parse_args_llama()
     seed_everything(42)
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+    # os.environ['NCCL_DEBUG'] = 'INFO'
     
+    kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=7200))
     accelerator = Accelerator(
         gradient_accumulation_steps=args.grad_steps,
+        kwargs_handlers=[kwargs]
     )
     accelerator.print(f"Initialized accelerator with FSDP")
 
@@ -72,16 +76,12 @@ def main():
     train_loader = DataLoader(train_dataset, 
                             batch_size=B,
                             collate_fn=collate_fn,
-                            shuffle=True,
-                            num_workers=16,
-                            pin_memory=True)
+                            shuffle=False)
 
     val_loader = DataLoader(val_dataset, 
                             batch_size=B,
                             collate_fn=collate_fn,
-                            shuffle=True,
-                            num_workers=16,
-                            pin_memory=True)
+                            shuffle=False)
 
     # -----------
     ## MODEL INIT
@@ -129,8 +129,9 @@ def main():
     
     iter_num = 0
     for epoch in range(args.num_epochs):
-        
         accelerator.print(f"Epoch {epoch}/{args.num_epochs}")
+        if hasattr(train_loader, 'sampler') and hasattr(train_loader.sampler, 'set_epoch'):
+            train_loader.sampler.set_epoch(epoch)
         model.train()
         epoch_loss = 0.0
         # backprop
@@ -179,7 +180,6 @@ def main():
             accelerator.print(f"\nEarly stopping at epoch {epoch}...")
             accelerator.end_training()
             break
-    
     
     accelerator.end_training()
     accelerator.print("Training Complete")
