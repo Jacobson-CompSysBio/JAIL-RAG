@@ -25,7 +25,6 @@ class GraphLLM(nn.Module):
     """
     Graph LLM object, re-implemented from G-Retriever: https://github.com/XiaoxinHe/G-Retriever/blob/main/src/model/graph_llm.py
     """
-
     def __init__(self,
                  max_txt_len: int = 512,
                  max_new_tokens: int = 32,

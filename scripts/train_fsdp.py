@@ -157,18 +157,18 @@ def main():
                 loss = model(batch)
                 val_loss += loss.item()
         val_loss /= len(val_loader)
-
-        # print epoch stats
-        accelerator.print(f"Epoch {epoch}/{args.num_epochs} | "
-                    f"Train Loss: {epoch_loss / len(train_loader):.4f} | "
-                    f"Validation Loss: {val_loss:.4f} | "
-                    f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}")
         
         # Save checkpoint if we have a new best validation loss
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch
             accelerator.save_model(model, save_path, safe_serialization=False)
+        
+        # print epoch stats
+        accelerator.print(f"Epoch {epoch}/{args.num_epochs} | "
+                    f"Train Loss: {epoch_loss / len(train_loader):.4f} | "
+                    f"Validation Loss: {val_loss:.4f} | "
+                    f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}")
 
         # checkpoint and save to log
         if accelerator.is_main_process:
