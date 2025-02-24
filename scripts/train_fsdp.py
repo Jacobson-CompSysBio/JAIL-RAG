@@ -130,10 +130,13 @@ def main():
     iter_num = 0
     for epoch in range(args.num_epochs):
         accelerator.print(f"Epoch {epoch}/{args.num_epochs}")
+        accelerator.print("Setting Sampler...")
         if hasattr(train_loader, 'sampler') and hasattr(train_loader.sampler, 'set_epoch'):
             train_loader.sampler.set_epoch(epoch)
         model.train()
         epoch_loss = 0.0
+
+        accelerator.print("Backprop...")
         # backprop
         for step, batch in enumerate(train_loader):
             with accelerator.accumulate(model):
@@ -158,6 +161,7 @@ def main():
                 val_loss += loss.item()
         val_loss /= len(val_loader)
         
+        accelerator.print("Saving checkpoint...")
         # Save checkpoint if we have a new best validation loss
         if val_loss < best_val_loss:
             best_val_loss = val_loss
