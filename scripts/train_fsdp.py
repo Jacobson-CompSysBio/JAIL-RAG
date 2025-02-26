@@ -36,9 +36,6 @@ from utils.collate import collate_fn
 from utils.seed import seed_everything
 from utils.lr_schedule import adjust_learning_rate
 
-# ----------------
-## SETUP FUNCTIONS
-# ----------------
 def main():
     # -------
     ## CONFIG
@@ -54,7 +51,7 @@ def main():
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
     # os.environ['NCCL_DEBUG'] = 'INFO'
     
-    kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=7200))
+    kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=86400))
     accelerator = Accelerator(
         gradient_accumulation_steps=args.grad_steps,
         kwargs_handlers=[kwargs]
@@ -86,7 +83,7 @@ def main():
     # -----------
     ## MODEL INIT
     # -----------
-    T = 256
+    T = 128
     model = GraphLLM(max_txt_len=T,
                     max_new_tokens=32,
                     llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
@@ -166,7 +163,8 @@ def main():
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch
-            accelerator.save_model(model, save_path, safe_serialization=False)
+            # not saving for now, just testing that we can get all the way through
+            # accelerator.save_model(model, save_path, safe_serialization=False)
         
         # print epoch stats
         accelerator.print(f"Epoch {epoch}/{args.num_epochs} | "
@@ -185,6 +183,7 @@ def main():
             accelerator.end_training()
             break
     
+    torch.cuda.empty_cache()
     accelerator.end_training()
     accelerator.print("Training Complete")
 
