@@ -35,9 +35,7 @@ from utils.collate import collate_fn
 from utils.seed import seed_everything
 from utils.lr_schedule import adjust_learning_rate
 
-# ----------------
-## SETUP FUNCTIONS
-# ----------------
+
 def main():
     # -------
     ## CONFIG

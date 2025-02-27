@@ -1,5 +1,13 @@
 # imports 
 import os
+
+# get nccl debug, blocking wait, etc
+os.environ['NCCL_DEBUG'] = 'INFO'
+os.environ['TORCH_NCCL_BLOCKING_WAIT'] = '1'
+os.environ['TORCH_NCCL_ASYNC_ERROR_HANDLING'] = '1'
+os.environ['NCCL_IB_DISABLE'] = '1'
+os.environ['NCCL_P2P_DISABLE'] = '1'
+
 import time
 import sys
 import wandb
@@ -35,9 +43,6 @@ from utils.collate import collate_fn
 from utils.seed import seed_everything
 from utils.lr_schedule import adjust_learning_rate
 
-# ----------------
-## SETUP FUNCTIONS
-# ----------------
 def main():
     # -------
     ## CONFIG
@@ -47,13 +52,22 @@ def main():
     save_path = '../checkpoints/graph_llm_fsdp/'
     log_path = '../logs/graph_llm_fsdp/'
 
+    # options
+    T = 128
+    B = 8
+    grad_steps = 1
+    num_epochs = 10
+    lr = 1e-4
+    wd = 1e-2
+
+
     # other config
     args = parse_args_llama()
     seed_everything(42)
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
     
     accelerator = Accelerator(
-        gradient_accumulation_steps=args.grad_steps,
+        gradient_accumulation_steps=grad_steps,
     )
     accelerator.print(f"Initialized accelerator with FSDP")
 
@@ -68,7 +82,6 @@ def main():
     val_dataset = Subset(dataset, idx_split['val'])
 
     # make dataloaders
-    B = 8
     train_loader = DataLoader(train_dataset, 
                             batch_size=B,
                             collate_fn=collate_fn,
@@ -86,7 +99,6 @@ def main():
     # -----------
     ## MODEL INIT
     # -----------
-    T = 256
     model = GraphLLM(max_txt_len=T,
                     max_new_tokens=32,
                     llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
@@ -114,7 +126,7 @@ def main():
         accelerator.print("Enabled gradient checkpointing for HF model.")
 
     # options
-    num_training_steps = args.num_epochs * len(train_loader)
+    num_training_steps = num_epochs * len(train_loader)
     progress_bar = tqdm.tqdm(range(num_training_steps))
     best_val_loss = float('inf')
     best_epoch = 0
@@ -128,9 +140,9 @@ def main():
             f.write("epoch,iter,train_loss,val_loss\n")
     
     iter_num = 0
-    for epoch in range(args.num_epochs):
+    for epoch in range(num_epochs):
         
-        accelerator.print(f"Epoch {epoch}/{args.num_epochs}")
+        accelerator.print(f"Epoch {epoch}/{num_epochs}")
         model.train()
         epoch_loss = 0.0
         # backprop
@@ -142,9 +154,9 @@ def main():
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             epoch_loss += loss.item()
-            iter_num += 1
+            iter_num += B
             progress_bar.update(1)
-            adjust_learning_rate(optimizer.param_groups[0], args.lr, step / len(train_loader) + epoch, args)
+            adjust_learning_rate(optimizer.param_groups[0], lr, step / len(train_loader) + epoch, args)
         train_loss = epoch_loss / len(train_loader)
 
         accelerator.print("validating...")
@@ -158,7 +170,7 @@ def main():
         val_loss /= len(val_loader)
 
         # print epoch stats
-        accelerator.print(f"Epoch {epoch}/{args.num_epochs} | "
+        accelerator.print(f"Epoch {epoch}/{num_epochs} | "
                     f"Train Loss: {epoch_loss / len(train_loader):.4f} | "
                     f"Validation Loss: {val_loss:.4f} | "
                     f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}")
@@ -167,7 +179,7 @@ def main():
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch
-            accelerator.save_model(model, save_path, safe_serialization=False)
+            # accelerator.save_model(model, save_path, safe_serialization=False)
 
         # checkpoint and save to log
         if accelerator.is_main_process:
@@ -176,9 +188,9 @@ def main():
         
         # Early stopping if needed
         if epoch - best_epoch >= args.patience:
-            accelerator.print(f"\nEarly stopping at epoch {epoch}...")
+            accelerator.print(f"\nEarly stopping at epoch {epoch + 1}...")
             accelerator.end_training()
-            break
+            break   
     
     
     accelerator.end_training()
