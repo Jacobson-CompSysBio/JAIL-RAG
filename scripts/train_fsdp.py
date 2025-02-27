@@ -1,16 +1,11 @@
 # imports 
 import os
-
-# get nccl debug, blocking wait, etc
-os.environ['NCCL_DEBUG'] = 'INFO'
-os.environ['TORCH_NCCL_BLOCKING_WAIT'] = '1'
-os.environ['TORCH_NCCL_ASYNC_ERROR_HANDLING'] = '1'
-
 import time
 import sys
 import wandb
 import tqdm.auto as tqdm
 import transformers
+from datetime import timedelta
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 import torch
 import torch.nn as nn
@@ -23,7 +18,7 @@ from torch_scatter import scatter
 from transformers import pipeline
 from DGXutils import GetLowestGPU
 from accelerate import Accelerator
-from accelerate.utils import DistributedDataParallelKwargs, DeepSpeedPlugin
+from accelerate.utils import DistributedDataParallelKwargs, DeepSpeedPlugin, InitProcessGroupKwargs
 
 sys.path.append('../')
 
@@ -50,22 +45,16 @@ def main():
     save_path = '../checkpoints/graph_llm_fsdp/'
     log_path = '../logs/graph_llm_fsdp/'
 
-    # options
-    T = 128
-    B = 8
-    grad_steps = 1
-    num_epochs = 10
-    lr = 1e-4
-    wd = 1e-2
-
-
     # other config
     args = parse_args_llama()
     seed_everything(42)
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+    # os.environ['NCCL_DEBUG'] = 'INFO'
     
+    kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=86400))
     accelerator = Accelerator(
-        gradient_accumulation_steps=grad_steps,
+        gradient_accumulation_steps=args.grad_steps,
+        kwargs_handlers=[kwargs]
     )
     accelerator.print(f"Initialized accelerator with FSDP")
 
@@ -80,23 +69,21 @@ def main():
     val_dataset = Subset(dataset, idx_split['val'])
 
     # make dataloaders
+    B = 8
     train_loader = DataLoader(train_dataset, 
                             batch_size=B,
                             collate_fn=collate_fn,
-                            shuffle=True,
-                            num_workers=16,
-                            pin_memory=True)
+                            shuffle=False)
 
     val_loader = DataLoader(val_dataset, 
                             batch_size=B,
                             collate_fn=collate_fn,
-                            shuffle=True,
-                            num_workers=16,
-                            pin_memory=True)
+                            shuffle=False)
 
     # -----------
     ## MODEL INIT
     # -----------
+    T = 128
     model = GraphLLM(max_txt_len=T,
                     max_new_tokens=32,
                     llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
@@ -109,11 +96,14 @@ def main():
     # --------------------
     # set optimizer
     params = [p for _, p in model.named_parameters() if p.requires_grad] # only update non-frozen params (graph encoder)
-    optimizer = torch.optim.AdamW(params, lr=lr, weight_decay=wd, betas=(0.9, 0.95))
+    optimizer = torch.optim.AdamW(params, lr=args.lr, weight_decay=args.wd, betas=(0.9, 0.95))
 
     model, optimizer, train_loader, val_loader = accelerator.prepare(
         model, optimizer, train_loader, val_loader
     )
+
+    for name, module in model._fp32_modules.items():
+        model._fp32_modules[name] = module.to(accelerator.device)
 
     # enable grad checkpointing for additional mem savings
     if hasattr(model.model, "gradient_checkpointing_enable"):
@@ -121,8 +111,8 @@ def main():
         accelerator.print("Enabled gradient checkpointing for HF model.")
 
     # options
-    num_training_steps = num_epochs * len(train_loader)
-    progress_bar = tqdm.tqdm(range(num_training_steps))
+    num_training_steps = args.num_epochs * len(train_loader)
+    progress_bar = tqdm.tqdm(range(num_training_steps), disable=not accelerator.is_main_process)
     best_val_loss = float('inf')
     best_epoch = 0
 
@@ -135,12 +125,15 @@ def main():
             f.write("epoch,iter,train_loss,val_loss\n")
     
     iter_num = 0
-    for epoch in range(num_epochs):
-        
-        epoch_loss = 0.0
-        accelerator.print(f"Epoch {epoch}/{num_epochs}")
+    for epoch in range(args.num_epochs):
+        accelerator.print(f"Epoch {epoch}/{args.num_epochs}")
+        accelerator.print("Setting Sampler...")
+        if hasattr(train_loader, 'sampler') and hasattr(train_loader.sampler, 'set_epoch'):
+            train_loader.sampler.set_epoch(epoch)
         model.train()
+        epoch_loss = 0.0
 
+        accelerator.print("Backprop...")
         # backprop
         for step, batch in enumerate(train_loader):
             with accelerator.accumulate(model):
@@ -150,9 +143,9 @@ def main():
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             epoch_loss += loss.item()
-            iter_num += B
+            iter_num += 1
             progress_bar.update(1)
-            adjust_learning_rate(optimizer.param_groups[0], lr, step / len(train_loader) + epoch, args)
+            adjust_learning_rate(optimizer.param_groups[0], args.lr, step / len(train_loader) + epoch, args)
         train_loss = epoch_loss / len(train_loader)
 
         accelerator.print("validating...")
@@ -164,31 +157,33 @@ def main():
                 loss = model(batch)
                 val_loss += loss.item()
         val_loss /= len(val_loader)
-
-        # print epoch stats
-        accelerator.print(f"Epoch {epoch}/{num_epochs} | "
-                    f"Train Loss: {epoch_loss / len(train_loader):.4f} | "
-                    f"Validation Loss: {val_loss:.4f} | "
-                    f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}")
         
+        accelerator.print("Saving checkpoint...")
         # Save checkpoint if we have a new best validation loss
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch
+            # not saving for now, just testing that we can get all the way through
             # accelerator.save_model(model, save_path, safe_serialization=False)
-
-        # # checkpoint and save to log
-        # if accelerator.is_main_process:
-        #     with open(log, 'a') as f:
-        #         f.write(f"{epoch},{iter_num},{train_loss},{val_loss}\n")
         
-        # # Early stopping if needed
-        # if epoch - best_epoch >= args.patience:
-        #     accelerator.print(f"\nEarly stopping at epoch {epoch + 1}...")
-        #     accelerator.end_training()
-        #     break   
+        # print epoch stats
+        accelerator.print(f"Epoch {epoch}/{args.num_epochs} | "
+                    f"Train Loss: {epoch_loss / len(train_loader):.4f} | "
+                    f"Validation Loss: {val_loss:.4f} | "
+                    f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}")
+
+        # checkpoint and save to log
+        if accelerator.is_main_process:
+            with open(log, 'a') as f:
+                f.write(f"{epoch},{iter_num},{train_loss},{val_loss}\n")
+        
+        # Early stopping if needed
+        if epoch - best_epoch >= args.patience:
+            accelerator.print(f"\nEarly stopping at epoch {epoch}...")
+            accelerator.end_training()
+            break
     
-    
+    torch.cuda.empty_cache()
     accelerator.end_training()
     accelerator.print("Training Complete")
 

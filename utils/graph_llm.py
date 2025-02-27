@@ -94,20 +94,25 @@ class GraphLLM(nn.Module):
         self.model = model
 
         # store gnn + proj as submodules so they're not touched by accelerate
-        self.graph_encoder = load_gnn_model[gnn_model_name](
+        graph_encoder = load_gnn_model[gnn_model_name](
             in_channels=gnn_in_dim,
             out_channels=gnn_hidden_dim,
             hidden_channels=gnn_hidden_dim,
             num_layers=gnn_num_layers,
             dropout=gnn_dropout,
             num_heads=gnn_num_heads
-        )
+        ).float().to(self.model.device)
 
         self.projector = nn.Sequential(
             nn.Linear(gnn_hidden_dim, 2048),
             nn.Sigmoid(),
             nn.Linear(2048, 4096)
-        )
+        ).to(self.model.device)
+
+        # store graph_encoder in this dictionary so it's not touched by accelerate
+        self._fp32_modules = {
+            "graph_encoder": graph_encoder,
+        }
             
         # get word embeddings - where is this coming from??
         self.word_embedding = self.model.model.get_input_embeddings()
@@ -138,17 +143,22 @@ class GraphLLM(nn.Module):
     
     def encode_graphs(self, samples):
         graphs = samples['graph'].to(self.model.device)
-        if self.gnn_model_name == "gat":
-            n_embeds, _ = self.graph_encoder(graphs.x, graphs.edge_index.long(), graphs.edge_attr) 
-        else:
-            n_embeds = self.graph_encoder(graphs.x, graphs.edge_index.long())
-        g_embed = scatter(n_embeds, graphs.batch, dim=0, reduce='mean') # shape: [batch_size, embed_dim]
-        return g_embed
-    
+        graph_encoder = self._fp32_modules["graph_encoder"]
+
+        # keep ops in fp32, not half
+        with torch.amp.autocast('cuda', enabled=False):
+            if self.gnn_model_name == "gat":
+                n_embeds, _ = graph_encoder(graphs.x, graphs.edge_index.long(), graphs.edge_attr) 
+            else:
+                n_embeds = graph_encoder(graphs.x, graphs.edge_index.long())
+            g_embeds = scatter(n_embeds, graphs.batch, dim=0, reduce='mean')
+        return g_embeds.bfloat16() if self.fsdp else g_embeds # turn back to half so it works with everything else
+
     def forward(self, samples):
         device = self.model.device  # cache device
 
-        graph_embeds = self.encode_graphs(samples)
+        # Encode graphs and project them
+        graph_embeds = self.encode_graphs(samples)  # shape: [batch_size, embed_dim]
         graph_embeds = self.projector(graph_embeds)
 
         # Tokenize the text inputs
@@ -170,9 +180,9 @@ class GraphLLM(nn.Module):
         for i in range(batch_size):
             label_ids = labels.input_ids[i][:self.max_new_tokens] + eos_tokens
             input_ids = (descriptions.input_ids[i][:self.max_txt_len] +
-                        questions.input_ids[i] +
-                        eos_user_tokens +
-                        label_ids)
+                         questions.input_ids[i] +
+                         eos_user_tokens +
+                         label_ids)
             # Each sample is: [bos] + [graph] + token_embeds(input_ids)
             sample_length = bos_embeds.size(0) + 1 + len(input_ids)
             lengths.append(sample_length)

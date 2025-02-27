@@ -85,6 +85,7 @@ class GraphTransformer(nn.Module):
             bn.reset_parameters()
     
     def forward(self, x, adj_t):
+        x = x.float()
         for i, conv in enumerate(self.convs[:-1]):
             x = conv(x, edge_index=adj_t)
             x = self.bns[i](x)
