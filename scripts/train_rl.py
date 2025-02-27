@@ -37,6 +37,7 @@ from utils.lr_schedule import adjust_learning_rate
 seed = 42
 T = 256
 B = 8
+num_epochs = 1
 
 # args from config.py
 args = parse_args_llama()
@@ -76,14 +77,6 @@ val_loader = DataLoader(val_dataset,
                         collate_fn=collate_fn,
                         num_workers=16)
 
-test_loader = DataLoader(test_dataset, 
-                         batch_size=B,
-                         drop_last=True,
-                         pin_memory=True,
-                         shuffle=True,
-                         collate_fn=collate_fn,
-                         num_workers=16)
-
 # ---------------------------------------------------------
 ## TRAINING
 
@@ -94,7 +87,8 @@ model = GraphLLM(max_text_len=T,
                  max_max_new_tokens=32,
                  max_memory=[80, 80],
                  llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
-                 llm_frozen='True',
+                 llm_frozen=True,
+                 fsdp=False,
                  revision="main") # args are defaulted in the class
 
 # options
@@ -164,11 +158,3 @@ for epoch in range(args.num_epochs):
 
 torch.cuda.empty_cache()
 torch.cuda.reset_max_memory_allocated()
-
-# ---------------------------------------------------------
-# EVALUATION
-
-# # test inference on one batch
-# batch = next(iter(test_loader))
-# out = model.inference(batch)
-# print(out)
