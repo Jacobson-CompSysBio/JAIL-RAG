@@ -18,7 +18,7 @@ class GCN(nn.Module):
         self.bns.append(nn.BatchNorm1d(hidden_channels))
 
         # hidden conv + bn stack
-        for _ in range(num_layers = 2):
+        for _ in range(num_layers - 2):
             self.convs.append(GCNConv(hidden_channels, hidden_channels))
             self.bns.append(nn.BatchNorm1d(hidden_channels))
         
@@ -94,7 +94,7 @@ class GraphTransformer(nn.Module):
         return x
         
 
-class GAT():
+class GAT(nn.Module):
     
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers, dropout, num_heads=4):
         super(GAT, self).__init__()

@@ -1,5 +1,13 @@
 # imports 
 import os
+
+# nccl fixes
+os.environ['TORCH_NCCL_BLOCKING_WAIT'] = '1'
+os.environ['TORCH_NCCL_ASYNC_ERROR_HANDLING'] = '1'
+os.environ['NCCL_P2P_DISABLE'] = '1'
+os.environ['NCCL_IB_DISABLE'] = '1'
+os.environ['NCCL_DEBUG'] = 'INFO'
+
 import time
 import sys
 import wandb
@@ -45,6 +53,13 @@ def main():
     save_path = '../checkpoints/graph_llm_fsdp/'
     log_path = '../logs/graph_llm_fsdp/'
 
+    # hyperparmams
+    B = 8
+    T = 128
+    grad_steps = 1
+    max_new_tokens = 32
+    num_epochs = 10
+
     # other config
     args = parse_args_llama()
     seed_everything(42)
@@ -53,7 +68,7 @@ def main():
     
     kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=86400))
     accelerator = Accelerator(
-        gradient_accumulation_steps=args.grad_steps,
+        gradient_accumulation_steps=grad_steps,
         kwargs_handlers=[kwargs]
     )
     accelerator.print(f"Initialized accelerator with FSDP")
@@ -69,7 +84,7 @@ def main():
     val_dataset = Subset(dataset, idx_split['val'])
 
     # make dataloaders
-    B = 8
+
     train_loader = DataLoader(train_dataset, 
                             batch_size=B,
                             collate_fn=collate_fn,
@@ -83,9 +98,8 @@ def main():
     # -----------
     ## MODEL INIT
     # -----------
-    T = 128
     model = GraphLLM(max_txt_len=T,
-                    max_new_tokens=32,
+                    max_new_tokens=max_new_tokens,
                     llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
                     llm_frozen=False, # set frozen to false so we can train with RL
                     fsdp=True, 
@@ -112,7 +126,7 @@ def main():
 
     # options
     num_training_steps = args.num_epochs * len(train_loader)
-    progress_bar = tqdm.tqdm(range(num_training_steps), disable=not accelerator.is_main_process)
+    progress_bar = tqdm.tqdm(range(num_training_steps))
     best_val_loss = float('inf')
     best_epoch = 0
 
@@ -125,11 +139,9 @@ def main():
             f.write("epoch,iter,train_loss,val_loss\n")
     
     iter_num = 0
-    for epoch in range(args.num_epochs):
-        accelerator.print(f"Epoch {epoch}/{args.num_epochs}")
+    for epoch in range(num_epochs):
+        accelerator.print(f"Epoch {epoch}/{num_epochs}")
         accelerator.print("Setting Sampler...")
-        if hasattr(train_loader, 'sampler') and hasattr(train_loader.sampler, 'set_epoch'):
-            train_loader.sampler.set_epoch(epoch)
         model.train()
         epoch_loss = 0.0
 
@@ -153,7 +165,7 @@ def main():
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for batch in val_loader:
+            for batch in tqdm.tqdm(val_loader):
                 loss = model(batch)
                 val_loss += loss.item()
         val_loss /= len(val_loader)
@@ -167,7 +179,7 @@ def main():
             # accelerator.save_model(model, save_path, safe_serialization=False)
         
         # print epoch stats
-        accelerator.print(f"Epoch {epoch}/{args.num_epochs} | "
+        accelerator.print(f"Epoch {epoch}/{num_epochs} | "
                     f"Train Loss: {epoch_loss / len(train_loader):.4f} | "
                     f"Validation Loss: {val_loss:.4f} | "
                     f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}")
