@@ -5,8 +5,6 @@ import os
 os.environ['NCCL_DEBUG'] = 'INFO'
 os.environ['TORCH_NCCL_BLOCKING_WAIT'] = '1'
 os.environ['TORCH_NCCL_ASYNC_ERROR_HANDLING'] = '1'
-os.environ['NCCL_IB_DISABLE'] = '1'
-os.environ['NCCL_P2P_DISABLE'] = '1'
 
 import time
 import sys
@@ -111,14 +109,11 @@ def main():
     # --------------------
     # set optimizer
     params = [p for _, p in model.named_parameters() if p.requires_grad] # only update non-frozen params (graph encoder)
-    optimizer = torch.optim.AdamW(params, lr=args.lr, weight_decay=args.wd, betas=(0.9, 0.95))
+    optimizer = torch.optim.AdamW(params, lr=lr, weight_decay=wd, betas=(0.9, 0.95))
 
     model, optimizer, train_loader, val_loader = accelerator.prepare(
         model, optimizer, train_loader, val_loader
     )
-
-    for name, module in model._fp32_modules.items():
-        model._fp32_modules[name] = module.to(accelerator.device)
 
     # enable grad checkpointing for additional mem savings
     if hasattr(model.model, "gradient_checkpointing_enable"):
@@ -142,9 +137,10 @@ def main():
     iter_num = 0
     for epoch in range(num_epochs):
         
+        epoch_loss = 0.0
         accelerator.print(f"Epoch {epoch}/{num_epochs}")
         model.train()
-        epoch_loss = 0.0
+
         # backprop
         for step, batch in enumerate(train_loader):
             with accelerator.accumulate(model):
@@ -181,16 +177,16 @@ def main():
             best_epoch = epoch
             # accelerator.save_model(model, save_path, safe_serialization=False)
 
-        # checkpoint and save to log
-        if accelerator.is_main_process:
-            with open(log, 'a') as f:
-                f.write(f"{epoch},{iter_num},{train_loss},{val_loss}\n")
+        # # checkpoint and save to log
+        # if accelerator.is_main_process:
+        #     with open(log, 'a') as f:
+        #         f.write(f"{epoch},{iter_num},{train_loss},{val_loss}\n")
         
-        # Early stopping if needed
-        if epoch - best_epoch >= args.patience:
-            accelerator.print(f"\nEarly stopping at epoch {epoch + 1}...")
-            accelerator.end_training()
-            break   
+        # # Early stopping if needed
+        # if epoch - best_epoch >= args.patience:
+        #     accelerator.print(f"\nEarly stopping at epoch {epoch + 1}...")
+        #     accelerator.end_training()
+        #     break   
     
     
     accelerator.end_training()
