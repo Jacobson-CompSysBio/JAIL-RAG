@@ -1,19 +1,10 @@
 # imports 
 import os
-
-# nccl fixes
-os.environ['TORCH_NCCL_BLOCKING_WAIT'] = '1'
-os.environ['TORCH_NCCL_ASYNC_ERROR_HANDLING'] = '1'
-os.environ['NCCL_P2P_DISABLE'] = '1'
-os.environ['NCCL_IB_DISABLE'] = '1'
-os.environ['NCCL_DEBUG'] = 'INFO'
-
 import time
 import sys
 import wandb
 import tqdm.auto as tqdm
 import transformers
-from datetime import timedelta
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 import torch
 import torch.nn as nn
@@ -26,7 +17,7 @@ from torch_scatter import scatter
 from transformers import pipeline
 from DGXutils import GetLowestGPU
 from accelerate import Accelerator
-from accelerate.utils import DistributedDataParallelKwargs, DeepSpeedPlugin, InitProcessGroupKwargs
+from accelerate.utils import DistributedDataParallelKwargs, DeepSpeedPlugin
 
 sys.path.append('../')
 
@@ -44,6 +35,9 @@ from utils.collate import collate_fn
 from utils.seed import seed_everything
 from utils.lr_schedule import adjust_learning_rate
 
+# ----------------
+## SETUP FUNCTIONS
+# ----------------
 def main():
     # -------
     ## CONFIG
@@ -53,23 +47,13 @@ def main():
     save_path = '../checkpoints/graph_llm_fsdp/'
     log_path = '../logs/graph_llm_fsdp/'
 
-    # hyperparmams
-    B = 8
-    T = 128
-    grad_steps = 1
-    max_new_tokens = 32
-    num_epochs = 10
-
     # other config
     args = parse_args_llama()
     seed_everything(42)
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
-    # os.environ['NCCL_DEBUG'] = 'INFO'
     
-    kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=86400))
     accelerator = Accelerator(
-        gradient_accumulation_steps=grad_steps,
-        kwargs_handlers=[kwargs]
+        gradient_accumulation_steps=args.grad_steps,
     )
     accelerator.print(f"Initialized accelerator with FSDP")
 
@@ -84,22 +68,27 @@ def main():
     val_dataset = Subset(dataset, idx_split['val'])
 
     # make dataloaders
-
+    B = 8
     train_loader = DataLoader(train_dataset, 
                             batch_size=B,
                             collate_fn=collate_fn,
-                            shuffle=False)
+                            shuffle=True,
+                            num_workers=16,
+                            pin_memory=True)
 
     val_loader = DataLoader(val_dataset, 
                             batch_size=B,
                             collate_fn=collate_fn,
-                            shuffle=False)
+                            shuffle=True,
+                            num_workers=16,
+                            pin_memory=True)
 
     # -----------
     ## MODEL INIT
     # -----------
+    T = 256
     model = GraphLLM(max_txt_len=T,
-                    max_new_tokens=max_new_tokens,
+                    max_new_tokens=32,
                     llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
                     llm_frozen=False, # set frozen to false so we can train with RL
                     fsdp=True, 
@@ -139,13 +128,11 @@ def main():
             f.write("epoch,iter,train_loss,val_loss\n")
     
     iter_num = 0
-    for epoch in range(num_epochs):
-        accelerator.print(f"Epoch {epoch}/{num_epochs}")
-        accelerator.print("Setting Sampler...")
+    for epoch in range(args.num_epochs):
+        
+        accelerator.print(f"Epoch {epoch}/{args.num_epochs}")
         model.train()
         epoch_loss = 0.0
-
-        accelerator.print("Backprop...")
         # backprop
         for step, batch in enumerate(train_loader):
             with accelerator.accumulate(model):
@@ -165,24 +152,22 @@ def main():
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for batch in tqdm.tqdm(val_loader):
+            for batch in val_loader:
                 loss = model(batch)
                 val_loss += loss.item()
         val_loss /= len(val_loader)
+
+        # print epoch stats
+        accelerator.print(f"Epoch {epoch}/{args.num_epochs} | "
+                    f"Train Loss: {epoch_loss / len(train_loader):.4f} | "
+                    f"Validation Loss: {val_loss:.4f} | "
+                    f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}")
         
-        accelerator.print("Saving checkpoint...")
         # Save checkpoint if we have a new best validation loss
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch
-            # not saving for now, just testing that we can get all the way through
-            # accelerator.save_model(model, save_path, safe_serialization=False)
-        
-        # print epoch stats
-        accelerator.print(f"Epoch {epoch}/{num_epochs} | "
-                    f"Train Loss: {epoch_loss / len(train_loader):.4f} | "
-                    f"Validation Loss: {val_loss:.4f} | "
-                    f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}")
+            accelerator.save_model(model, save_path, safe_serialization=False)
 
         # checkpoint and save to log
         if accelerator.is_main_process:
@@ -195,7 +180,7 @@ def main():
             accelerator.end_training()
             break
     
-    torch.cuda.empty_cache()
+    
     accelerator.end_training()
     accelerator.print("Training Complete")
 
