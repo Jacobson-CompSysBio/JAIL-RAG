@@ -1,5 +1,11 @@
 # imports 
 import os
+
+# special cuda stuff
+os.environ['NCCL_DEBUG'] = 'INFO'
+os.environ['TORCH_NCCL_BLOCKING_WAIT'] = '1'
+
+import gc
 import time
 import sys
 import wandb
@@ -86,7 +92,7 @@ def main():
     T = 128
     model = GraphLLM(max_txt_len=T,
                     max_new_tokens=32,
-                    llm_model_path='meta-llama/Meta-Llama-3-8B-Instruct',
+                    llm_model_path='meta-llama/Meta-Llama-3.1-8B-Instruct',
                     llm_frozen=False, # set frozen to false so we can train with RL
                     fsdp=True, 
                     ) # args are defaulted in the class
@@ -134,54 +140,74 @@ def main():
         epoch_loss = 0.0
 
         accelerator.print("Backprop...")
+
+        # synchronize gpus
+        accelerator.wait_for_everyone()
+        torch.cuda.synchronize()
+
         # backprop
         for step, batch in enumerate(train_loader):
-            with accelerator.accumulate(model):
-                loss = model(batch)
-                accelerator.backward(loss)
-                clip_grad_norm_(optimizer.param_groups[0]['params'], 0.1)
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
+            loss = model(batch)
+            accelerator.backward(loss)
+
+            # sync again to avoid out-of-sync buildup
+            torch.cuda.synchronize()
+
+            clip_grad_norm_(optimizer.param_groups[0]['params'], 0.1)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+
+            # clear memory again
+            if step % 50 == 0:
+                torch.cuda.empty_cache()
+                gc.collect()
+
             epoch_loss += loss.item()
             iter_num += 1
             progress_bar.update(1)
             adjust_learning_rate(optimizer.param_groups[0], args.lr, step / len(train_loader) + epoch, args)
+
+            # wait for everyone to finish
+            if step % 100 == 0:
+                accelerator.wait_for_everyone()
+                torch.cuda.synchronize()
+
         train_loss = epoch_loss / len(train_loader)
 
-        accelerator.print("validating...")
-        # validation
-        model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for batch in val_loader:
-                loss = model(batch)
-                val_loss += loss.item()
-        val_loss /= len(val_loader)
+        # accelerator.print("validating...")
+        # # validation
+        # model.eval()
+        # val_loss = 0.0
+        # with torch.no_grad():
+        #     for batch in val_loader:
+        #         loss = model(batch)
+        #         val_loss += loss.item()
+        # val_loss /= len(val_loader)
         
-        accelerator.print("Saving checkpoint...")
-        # Save checkpoint if we have a new best validation loss
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            best_epoch = epoch
-            # not saving for now, just testing that we can get all the way through
-            # accelerator.save_model(model, save_path, safe_serialization=False)
+        # accelerator.print("Saving checkpoint...")
+        # # Save checkpoint if we have a new best validation loss
+        # if val_loss < best_val_loss:
+        #     best_val_loss = val_loss
+        #     best_epoch = epoch
+        #     # not saving for now, just testing that we can get all the way through
+        #     # accelerator.save_model(model, save_path, safe_serialization=False)
         
-        # print epoch stats
-        accelerator.print(f"Epoch {epoch}/{args.num_epochs} | "
-                    f"Train Loss: {epoch_loss / len(train_loader):.4f} | "
-                    f"Validation Loss: {val_loss:.4f} | "
-                    f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}")
+        # # print epoch stats
+        # accelerator.print(f"Epoch {epoch}/{args.num_epochs} | "
+        #             f"Train Loss: {epoch_loss / len(train_loader):.4f} | "
+        #             f"Validation Loss: {val_loss:.4f} | "
+        #             f"Best Validation Loss: {best_val_loss:.4f} at epoch {best_epoch}")
 
-        # checkpoint and save to log
-        if accelerator.is_main_process:
-            with open(log, 'a') as f:
-                f.write(f"{epoch},{iter_num},{train_loss},{val_loss}\n")
+        # # checkpoint and save to log
+        # if accelerator.is_main_process:
+        #     with open(log, 'a') as f:
+        #         f.write(f"{epoch},{iter_num},{train_loss},{val_loss}\n")
         
-        # Early stopping if needed
-        if epoch - best_epoch >= args.patience:
-            accelerator.print(f"\nEarly stopping at epoch {epoch}...")
-            accelerator.end_training()
-            break
+        # # Early stopping if needed
+        # if epoch - best_epoch >= args.patience:
+        #     accelerator.print(f"\nEarly stopping at epoch {epoch}...")
+        #     accelerator.end_training()
+        #     break
     
     torch.cuda.empty_cache()
     accelerator.end_training()
