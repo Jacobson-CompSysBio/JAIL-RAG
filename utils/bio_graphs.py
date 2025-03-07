@@ -2,8 +2,9 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-# PATH = '../data/DREAM4_gold_standards/shortest_path_node_id'
-
+# ---------------
+## NORMAL DATASET
+# ---------------
 class BiologicalDataset(Dataset):
   def __init__(self, path: str):
     super().__init__()
@@ -29,7 +30,7 @@ class BiologicalDataset(Dataset):
       'question': text['question'],
       'scope': text['scope'],
       'label': text['label'],
-      'desc': 'A question with a yes/no answer is provided along with a biological graph. The task is to answer the question based on the graph. Provide reasoning, inside of <think></think> tags, and the answer inside of <answer></answer> tags.',
+      'desc': 'A question with a yes/no answer is provided along with a graph. Answer the question based on the graph. Provide reasoning inside of <think></think> tags and the answer inside of <answer></answer> tags.',
       'graph': graph,
     }
   

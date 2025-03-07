@@ -226,9 +226,10 @@ class GraphLLM(nn.Module):
                 labels=label_input_ids,
             )
 
-        return outputs.loss
+        return outputs.loss, outputs
 
-    def inference(self, samples):
+    def inference(self, samples, 
+                  num_generations=1):
         # cache device
         device = self.model.device
 
@@ -273,8 +274,9 @@ class GraphLLM(nn.Module):
                 max_new_tokens=self.max_new_tokens,
                 attention_mask=attention_mask,
                 # do_sample=True,
-                pad_token_id=self.model.config.eos_token_id,
-                use_cache=True  # IMPORTANT!
+                pad_token_id=self.tokenizer.eos_token_id,
+                use_cache=True,  # IMPORTANT!
+                num_return_sequences=num_generations,
             )
         pred = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
 
@@ -282,7 +284,8 @@ class GraphLLM(nn.Module):
                 'pred': pred,
                 'label': samples['label'],
                 'question': samples['question'],
-                'desc': samples['desc'], }
+                'desc': samples['desc'],
+                'out_ids': outputs}
     
     def print_trainable_params(self):
         trainable_params = 0
