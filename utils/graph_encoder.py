@@ -124,10 +124,20 @@ class GAT(nn.Module):
         x = self.convs[-1](x, edge_index=edge_index, edge_attr=edge_attr)
         return x, edge_attr
 
+# add node2vec
+class Node2Vec(nn.Module):
+    pass
+
+# add multiverse
+class Multiverse(nn.Module):
+    pass
+
 # define load gnn model dict that call respective class
 load_gnn_model = {
     'gcn': GCN,
     'gat': GAT,
-    'gt': GraphTransformer
+    'gt': GraphTransformer,
+    'node2vec': Node2Vec,
+    'multiverse': Multiverse,
 }
     

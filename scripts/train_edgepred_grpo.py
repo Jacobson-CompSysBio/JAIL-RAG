@@ -73,6 +73,9 @@ def set_random_seed(seed: int = 42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+# ---------------------
+## CONFIG
+# ---------------------
 # Call the function to set random seed for reproducibility
 set_random_seed(42)
 
@@ -81,11 +84,26 @@ os.environ["WANDB_API_KEY"] = os.getenv("WANDB_API_KEY")
 os.environ["WANDB_PROJECT"] = os.getenv("WANDB_PROJECT")
 os.environ["WANDB_ENTITY"] = os.getenv("WANDB_ENTITY")
 
-# set visible devices to gpus 0-3
 os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3,4,5,6,7"
 
 T = 512
+training_config = {
+    'num_iterations': 1,
+    'num_steps': 500,
+    'num_generations': 8, # reduce if you have GPUs with less VRAM
+    'max_completion_length': 200, # reduce if you have GPUs with less VRAM
+    'beta': 0.04,
+    'learning_rate': 1e-6,
+    'mu': 3,
+    'epsilon': 0.1
+}
 
+FORMAT_PATTERN = re.compile(r"^<think>.*?</think><answer>.*?</answer>$", re.DOTALL | re.VERBOSE)
+ANSWER_PATTERN = re.compile(r"<answer>(.*?)</answer>")
+
+# ---------------------
+## DATASET & MODEL
+# ---------------------
 # get dataset to see what we're working with
 path = "../data/subgraphs/all/"
 dataset = BiologicalDataset(path)
@@ -99,22 +117,18 @@ model = GraphLLM(max_txt_len=T,
                 fsdp=False, 
                 )
 
-def extract_answer(text):
+# ---------------------
+## EVALUATION FUNCTIONS
+# ---------------------
+def extract_answer(text: str) -> str:
     """
     Extract answer from the model output.
-
-    Args:
-        text (str): The model output text.
-    
-    Returns:
-        str: The extracted answer.
     """
-    
-    # extract answer from prediction
-    ans = ''.join(re.findall(r"<answer>(.*?)</answer>", text)[-1]) 
-    ans = ans.lower() 
-    return ans
-
+    matches = ANSWER_PATTERN.findall(text)
+    if matches:
+        return matches[-1].lower()
+    else:
+        return ""
 
 def evaluate_model(model, batch):
     """
@@ -129,10 +143,6 @@ def evaluate_model(model, batch):
 
     Returns:
         float: The accuracy of the model on the evaluation examples.
-    
-    References:
-        - PyTorch DataLoader documentation: https://pytorch.org/docs/stable/data.html
-        - Accelerate library for device placement and distributed inference: https://huggingface.co/docs/accelerate 
     """
     model.eval()
     correct = 0
@@ -148,7 +158,6 @@ def evaluate_model(model, batch):
 
     # Assume outputs["pred"] is a list or tensor of predictions of length equal to batch_size.
     for i in range(batch_size):
-        # Extract the predicted answer for this example.
         predicted = extract_answer(outputs["pred"][i])
         expected = batch["label"][i]
         is_correct = (predicted == expected)
@@ -176,35 +185,37 @@ def evaluate_model(model, batch):
     model.train()
     return accuracy
 
-
+# ---------------------
+## REWARD FUNCTIONS
+# ---------------------
 # function to reward formatting
 def reward_format(gt, pred):
     """
-    if the answer is in the correct format, reward 1.25, else reward -1
+    if the answer is in the correct format, reward 1.25, else reward 0
     """
-    
-    # answer format
-    pattern = r"^<think>.*?</think><answer>.*?</answer>$"
 
-    return 1.25 if re.match(pattern, pred, re.DOTALL | re.VERBOSE) else -1
+    score = 0.0
+    if "<think>" in pred: score += 0.2
+    if "</think>" in pred: score += 0.2
+    if "<answer>" in pred: score += 0.2
+    if "</answer>" in pred: score += 0.2
+    return score
 
 # define reward function for node connectivity
 def reward_correct_yn(gt, pred) -> int: 
     """
-    given a yes/no answer and ground truth, return 1 if correct, -1 if incorrect
+    given a yes/no answer and ground truth, return 1 if correct, 0 if incorrect
     """
 
     # extract answer from prediction
-    ans = ''.join(re.findall(r"<answer>(.*?)</answer>", pred)) 
-    ans = ans.lower() 
+    ans = ''.join(ANSWER_PATTERN.findall(pred)).strip().lower() 
 
     # if the model produced an answer, compare it to the ground truth - return 1 if correct, -1 if incorrect
-    if ans == gt:
-        return 1
-    else:
-        return -1
+    return 1 if ans == gt.strip().lower() else 0
     
-def combined_reward(prompts, completions, answer):
+def combined_reward(prompts: list[str], completions: list[list[dict]], answer: list[str],
+                    format_weight: float = 1.0,
+                    correctness_weight: float = 1.0) -> list[float]:
     """
     Combined reward function for yes/no questions and answer formatting.
     
@@ -222,11 +233,15 @@ def combined_reward(prompts, completions, answer):
     for gt, comp in zip(answer, completions):
         # For simplicity, use the first completion for computing the reward.
         pred = comp[0]['content']
-        r1 = reward_correct_yn(gt, pred)
-        r2 = reward_format(gt, pred)
-        rewards.append(r1 + r2)
+        r_correct = reward_correct_yn(gt, pred)
+        r_format = reward_format(gt, pred)
+        total_reward = format_weight * r_format + correctness_weight * r_correct
+        rewards.append(total_reward)
     return rewards
 
+# ------------------------
+## GRPO TRAINING FUNCTIONS
+# ------------------------
 def selective_log_softmax(logits, input_ids):
     """
     Computes log probabilities for specific tokens in the vocabulary.
@@ -243,7 +258,7 @@ def selective_log_softmax(logits, input_ids):
         2. Uses gather to extract only the log probabilities corresponding to the input_ids.
         3. Removes the extra dimension to match the original shape of input_ids.
     """
-    log_probs = nn.functional.log_softmax(logits, dim=-1)
+    log_probs = F.log_softmax(logits, dim=-1)
     return log_probs.gather(dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
 
 def compute_log_probs(model, input_ids, attention_mask, logits_to_keep):
@@ -308,13 +323,6 @@ def generate_completions(model, batch, num_generations=4, max_completion_length=
 
     Returns:
         tuple: Containing prompt IDs, prompt mask, completion IDs, and completion mask.
-
-    Explanation:
-        1. Encodes the prompts and moves them to the appropriate device.
-        2. Repeats each prompt num_generations times to generate multiple completions.
-        3. Generates completions using the model with specified parameters.
-        4. Extracts the completion IDs (excluding the prompt tokens).
-        5. Creates a mask for the completions using create_completion_mask.
     """
 
     # tokenize prompt inputs
@@ -322,7 +330,6 @@ def generate_completions(model, batch, num_generations=4, max_completion_length=
     inputs = model.tokenizer(prompt_inputs, return_tensors="pt", padding=True, padding_side="left")
     prompt_ids = inputs["input_ids"]
     prompt_mask = inputs["attention_mask"]
-    print(f"Input batch size: {prompt_ids.size(0)}")
 
     prompt_length = prompt_ids.size(1)
     prompt_ids = prompt_ids.repeat_interleave(num_generations, dim=0)
@@ -330,7 +337,6 @@ def generate_completions(model, batch, num_generations=4, max_completion_length=
 
     outputs = model.inference(batch, num_generations=num_generations)
 
-    print(f"Output batch size: {outputs['out_ids'].size(0)}")
     completion_ids = outputs["out_ids"][:, prompt_length:]
     completion_mask = create_completion_mask(completion_ids, model.tokenizer.eos_token_id)
     return prompt_ids, prompt_mask, completion_ids, completion_mask
@@ -356,7 +362,6 @@ def generate_rollout_data(model, ref_model, batch_samples, num_generations, max_
         )
 
     # Ensure all tensors are on the same device
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     prompt_ids = prompt_ids.to(device)
     prompt_mask = prompt_mask.to(device)
     completion_ids = completion_ids.to(device)
@@ -370,13 +375,10 @@ def generate_rollout_data(model, ref_model, batch_samples, num_generations, max_
     ref_log_probs = compute_log_probs(ref_model, input_ids, attention_mask, logits_to_keep)
 
     # Format completions and prepare repeated prompts/answers for reward calculation.
-    formatted_completions = [
-        [{'content': model.tokenizer.decode(ids, skip_special_tokens=True)}]
-        for ids in completion_ids
-    ]
+    decoded = model.tokenizer.batch_decode(completion_ids, skip_special_tokens=True)
+    formatted_completions = [[{"content": d}] for d in decoded]
     repeated_prompts = [p for p in prompts for _ in range(num_generations)]
     repeated_answers = [a for a in answers for _ in range(num_generations)]
-
     return {
         "input_ids": input_ids,
         "attention_mask": attention_mask,
@@ -418,7 +420,8 @@ def grpo_loss(model, ref_model, rollout_data, reward_function, beta=0.01, epsilo
         7. Combines surrogate loss and KL penalty.
         8. Averages the loss across all tokens and batches.
     """
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = model.device
+
     input_ids = rollout_data["input_ids"]
     attention_mask = rollout_data["attention_mask"]
     completion_mask = rollout_data["completion_mask"]
@@ -448,7 +451,8 @@ def grpo_loss(model, ref_model, rollout_data, reward_function, beta=0.01, epsilo
     kl = torch.exp(ref_log_probs - token_log_probs) - (ref_log_probs - token_log_probs) - 1
 
     per_token_loss = surrogate_loss - beta * kl
-    loss = -((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+    
+    loss = -((per_token_loss * completion_mask).sum(dim=1) / (completion_mask.sum(dim=1) + 1e-8)).mean()
     return loss, avg_reward
 
 
@@ -459,69 +463,32 @@ def train_with_grpo(model,
                     num_generations=4, 
                     max_completion_length=128, 
                     beta=0.1,
-                    learning_rate=5e-6, 
+                    learning_rate=1e-5, 
                     mu=3, 
                     epsilon=0.2, 
-                    reward_function=None, 
-                    device_ids=None):
-    """
-    Modified GRPO training function that accepts a DataLoader as input.
-
-    Args:
-        model: The language model to train.
-        train_dataloader (DataLoader): PyTorch DataLoader providing batched training data.
-        num_iterations (int): Number of outer iterations (reference model updates).
-        num_steps (int): Number of batch updates per iteration.
-        num_generations (int): Number of completions per prompt.
-        max_completion_length (int): Maximum token length for completions.
-        beta (float): KL penalty coefficient.
-        learning_rate (float): Learning rate for optimizer.
-        mu (int): Number of policy updates per batch.
-        epsilon (float): PPO clipping parameter.
-        reward_function: Function that calculates rewards for completions.
-        device_ids (list): List of GPU device IDs for DataParallel.
-
-    Returns:
-        The trained model.
-
-    Explanation:
-        1. For each outer iteration:
-           - Creates a reference model as a deep copy of the current policy model.
-           - Reinitializes the optimizer for the policy model.
-           - Iterates over the DataLoader for num_steps:
-             a. Retrieves a batch from the DataLoader.
-             b. Generates rollout data including completions and log probabilities.
-             c. For mu iterations:
-                i. Computes the GRPO loss.
-                ii. Updates the policy model using gradient descent.
-           - Monitors GPU memory usage and prints progress information.
-    """
-    # Outer loop: iterative GRPO updates.
+                    reward_function=None):
+    scaler = torch.amp.GradScaler("cuda")
     for iteration in range(num_iterations):
         print(f"\nIteration {iteration+1}/{num_iterations}")
 
-        # Create a reference model (deep copy) and set it to eval mode.
+        # Create and freeze the reference model.
         ref_model = copy.deepcopy(model)
         ref_model.eval()
         for param in ref_model.parameters():
             param.requires_grad = False
         print("Reference model created.")
 
-        # Reinitialize the optimizer for this iteration.
         optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
         model.train()
 
-        # Create an iterator from the DataLoader.
         data_iter = iter(train_dataloader)
         for step in range(num_steps):
             try:
                 batch_samples = next(data_iter)
             except StopIteration:
-                # Reinitialize the iterator if the DataLoader is exhausted.
                 data_iter = iter(train_dataloader)
                 batch_samples = next(data_iter)
 
-            # Generate rollout data without tracking gradients.
             with torch.no_grad():
                 rollout_data = generate_rollout_data(
                     model,
@@ -531,65 +498,70 @@ def train_with_grpo(model,
                     max_completion_length
                 )
 
-            # Perform multiple policy updates (mu iterations) on the same rollout data.
+            optimizer.zero_grad()
+            cumulative_loss = 0.0
+            # accumulate gradients over mu iterations
             for grpo_iter in range(mu):
-                loss, avg_reward = grpo_loss(
-                    model,
-                    ref_model,
-                    rollout_data,
-                    reward_function,
-                    beta=beta,
-                    epsilon=epsilon
-                )
-                optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
-                optimizer.step()
+                with torch.amp.autocast("cuda"):
+                    loss, avg_reward = grpo_loss(
+                        model,
+                        ref_model,
+                        rollout_data,
+                        reward_function,
+                        beta=beta,
+                        epsilon=epsilon
+                    )
+                cumulative_loss += loss.item()
+            
+            # normalize the loss by mu and take a step
+            cumulative_loss /= mu
+            scaler.scale(cumulative_loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+            scaler.step(optimizer)
+            scaler.update()
 
-                # Log training metrics (for example, with wandb)
-                wandb.log({
-                    "loss": loss.item(),
-                    "average_reward": avg_reward,
-                    "iteration": iteration + 1,
-                    "step": step + 1,
-                    "grpo_iter": grpo_iter + 1
-                })
-                print(f"Iteration {iteration+1}/{num_iterations}, Step {step+1}/{num_steps}, "
-                      f"GRPO iter {grpo_iter+1}/{mu}, loss: {loss.item():.4f}")
+            wandb.log({
+                "loss": loss.item(),
+                "average_reward": avg_reward,
+                "iteration": iteration + 1,
+                "step": step + 1,
+                "grpo_iter": grpo_iter + 1
+            })
+            print(f"Iteration {iteration+1}/{num_iterations}, Step {step+1}/{num_steps}, "
+                    f"GRPO iter {grpo_iter+1}/{mu}, loss: {loss.item():.4f}")
+
+        # Free the reference model to release memory.
+        del ref_model
+        torch.cuda.empty_cache()
     return model
 
-training_config = {
-    'num_iterations': 1,
-    'num_steps': 500,
-    'num_generations': 4, # reduce if you have GPUs with less VRAM
-    'max_completion_length': 200, # reduce if you have GPUs with less VRAM
-    'beta': 0.04,
-    'learning_rate': 5e-6,
-    'mu': 1,
-    'epsilon': 0.1
-}
+# ---------------------
+## TRAINING
+# ---------------------
 
-print("\nInitial model evaluation before finetuning:")
-pre_grpo_accuracy = evaluate_model(model, next(iter(loader)))
-print(f"Pre-GRPO Accuracy: {pre_grpo_accuracy:.2f}%")
+if __name__ == "__main__":
+    print("\nInitial model evaluation before finetuning:")
+    pre_grpo_accuracy = evaluate_model(model, next(iter(loader)))
+    print(f"Pre-GRPO Accuracy: {pre_grpo_accuracy:.2f}%")
 
-# Initialize Weights & Biases
-wandb.init(project=os.environ["WANDB_PROJECT"], entity=os.environ["WANDB_ENTITY"], reinit=True)
-print("Weights & Biases initialized.")
+    # Initialize Weights & Biases
+    wandb.init(project=os.environ["WANDB_PROJECT"], entity=os.environ["WANDB_ENTITY"], reinit=True)
+    print("Weights & Biases initialized.")
 
-print("\nStarting RL fine-tuning using GRPO...")
-model = train_with_grpo(model, loader,
-                        reward_function=combined_reward,
-                        **training_config
-)
+    print("\nStarting RL fine-tuning using GRPO...")
+    model = train_with_grpo(model, loader,
+                            reward_function=combined_reward,
+                            **training_config
+    )
 
-wandb.finish()
-print("Training completed and wandb run finished.")
+    wandb.finish()
+    print("Training completed and wandb run finished.")
 
-print("\nFinal model evaluation after GRPO RL fine-tuning:")
-post_grpo_accuracy = evaluate_model(model, next(iter(loader)))
-print(f"Post-GRPO Accuracy: {post_grpo_accuracy:.2f}%")
+    print("\nFinal model evaluation after GRPO RL fine-tuning:")
+    post_grpo_accuracy = evaluate_model(model, next(iter(loader)))
+    print(f"Post-GRPO Accuracy: {post_grpo_accuracy:.2f}%")
 
-print("\nSaving GRPO fine-tuned model...")
-model.save_pretrained("grpo_finetuned_model")
-model.tokenizer.save_pretrained("grpo_finetuned_model")
+    print("\nSaving GRPO fine-tuned model...")
+    model.model.save_pretrained("grpo_finetuned_model")
+    model.tokenizer.save_pretrained("grpo_finetuned_model")
