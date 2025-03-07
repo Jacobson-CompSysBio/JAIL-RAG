@@ -286,6 +286,91 @@ def compute_log_probs(model, input_ids, attention_mask, logits_to_keep):
     # Use your custom selective log softmax to compute log probabilities.
     return selective_log_softmax(logits, trimmed_input_ids)
 
+def compute_log_probs_multimodal(model, samples, prompt_ids, completion_ids, logits_to_keep):
+    """
+    Computes log probabilities for the last `logits_to_keep` tokens using multimodal inputs.
+    
+    Instead of feeding only token IDs to the underlying transformer, this function first builds
+    a full embedding sequence by concatenating:
+       1. The BOS token embedding.
+       2. The graph embedding (computed from the input graphs and passed through the projector).
+       3. The token embeddings of the prompt text.
+       4. The token embeddings of the generated completions.
+       
+    The resulting embeddings (and a corresponding attention mask) are then fed to the transformer.
+    
+    Args:
+        model (GraphLLM): Your multimodal model instance.
+        samples (dict): Batch samples containing keys like "desc", "question", and "graph".
+        prompt_ids (torch.Tensor): Tensor of prompt token IDs (e.g., derived from [desc]+[question]).
+                                   Shape: (batch_size, prompt_seq_len)
+        completion_ids (torch.Tensor): Tensor of generated completion token IDs.
+                                       Shape: (batch_size, comp_seq_len)
+        logits_to_keep (int): Number of tokens (from the completion) for which to compute log probabilities.
+    
+    Returns:
+        torch.Tensor: Log probabilities for the selected tokens. Shape: (batch_size, logits_to_keep)
+    """
+    device = model.device
+    batch_size = prompt_ids.size(0)
+    
+    # Retrieve constant embeddings
+    bos_embeds = model.bos_embeds   # Shape: (1, embed_dim)
+    pad_embeds = model.pad_embeds   # Shape: (1, embed_dim)
+    
+    # Compute graph embeddings from the input samples and project them
+    graph_embeds = model.encode_graphs(samples)    # (batch_size, embed_dim)
+    graph_embeds = model.projector(graph_embeds)     # (batch_size, proj_dim)
+    
+    # Compute token embeddings for the prompt text
+    token_embeds = model.word_embedding(prompt_ids)  # (batch_size, prompt_seq_len, embed_dim)
+    
+    # Build the full prompt embeddings for each sample: [BOS] + [Graph] + [Token Embeds]
+    full_prompt_embeds = []
+    for i in range(batch_size):
+        # Concatenate: BOS token (1, D), graph embedding (1, D) and token embeddings (L, D)
+        sample_embeds = torch.cat([bos_embeds, graph_embeds[i].unsqueeze(0), token_embeds[i]], dim=0)
+        full_prompt_embeds.append(sample_embeds)
+    
+    # Pad the prompt embeddings so that all samples have the same length
+    # (Assuming left-padding; you can also use right-padding if that fits your setup better)
+    full_prompt_embeds = nn.utils.rnn.pad_sequence(full_prompt_embeds, batch_first=True,
+                                                   padding_value=pad_embeds.squeeze(0))
+    # Build an attention mask for the prompt part (1 for valid tokens, 0 for padded tokens)
+    max_prompt_len = full_prompt_embeds.size(1)
+    prompt_attention_mask = torch.zeros(batch_size, max_prompt_len, device=device, dtype=torch.long)
+    for i in range(batch_size):
+        # Assume valid tokens are at the end (right-aligned)
+        valid_length = full_prompt_embeds[i].size(0)
+        prompt_attention_mask[i, -valid_length:] = 1
+    
+    # Compute embeddings for the completion tokens
+    completion_embeds = model.word_embedding(completion_ids)  # (batch_size, comp_seq_len, embed_dim)
+    
+    # Concatenate prompt embeddings with completion embeddings to form full sequence embeddings
+    inputs_embeds = torch.cat([full_prompt_embeds, completion_embeds], dim=1)
+    
+    # Create the final attention mask by concatenating the prompt mask with a mask of ones for the completion
+    comp_mask = torch.ones(completion_ids.size(), device=device, dtype=torch.long)
+    final_attention_mask = torch.cat([prompt_attention_mask, comp_mask], dim=1)
+    
+    # Forward pass through the underlying transformer using the combined embeddings
+    with model.maybe_autocast():
+        outputs = model.model(
+            inputs_embeds=inputs_embeds,
+            attention_mask=final_attention_mask,
+            return_dict=True,
+            use_cache=False,
+        )
+    
+    # Extract the logits corresponding to the completion tokens (last logits_to_keep tokens)
+    logits = outputs.logits[:, -logits_to_keep:, :]  # (batch_size, logits_to_keep, vocab_size)
+    trimmed_completion_ids = completion_ids[:, -logits_to_keep:]
+    
+    # Use your custom selective log softmax to compute the log probabilities of the actual tokens
+    log_probs = selective_log_softmax(logits, trimmed_completion_ids)
+    return log_probs
+
 def create_completion_mask(completion_ids, eos_token_id):
     """
     Creates a mask for completion tokens that excludes tokens after the EOS token.
@@ -312,76 +397,71 @@ def create_completion_mask(completion_ids, eos_token_id):
 
 def generate_completions(model, batch, num_generations=4, max_completion_length=32):
     """
-    Generates multiple completions for each prompt.
-
-    Args:
-        model: The language model.
-        tokenizer: The tokenizer for encoding and decoding text.
-        prompts (list): List of text prompts.
-        num_generations (int): Number of completions to generate per prompt.
-        max_completion_length (int): Maximum number of tokens to generate.
-
-    Returns:
-        tuple: Containing prompt IDs, prompt mask, completion IDs, and completion mask.
+    Generates multiple completions for each prompt and returns prompt_ids,
+    prompt_mask, completion_ids, and completion_mask.
     """
-
-    # tokenize prompt inputs
+    # Tokenize prompt inputs (concatenation of description and question)
     prompt_inputs = [batch["desc"][i] + batch["question"][i] for i in range(len(batch["desc"]))]
     inputs = model.tokenizer(prompt_inputs, return_tensors="pt", padding=True, padding_side="left")
-    prompt_ids = inputs["input_ids"]
+    prompt_ids = inputs["input_ids"]  # (batch_size, prompt_seq_len)
     prompt_mask = inputs["attention_mask"]
 
-    prompt_length = prompt_ids.size(1)
+    # Repeat each prompt for the number of generations
     prompt_ids = prompt_ids.repeat_interleave(num_generations, dim=0)
     prompt_mask = prompt_mask.repeat_interleave(num_generations, dim=0)
 
+    # Generate outputs using your inference method
     outputs = model.inference(batch, num_generations=num_generations)
-
+    # Assume outputs["out_ids"] is of shape (batch_size*num_generations, total_seq_len)
+    total_seq_len = outputs["out_ids"].size(1)
+    prompt_length = prompt_ids.size(1)
+    # The completion part is the tokens after the prompt
     completion_ids = outputs["out_ids"][:, prompt_length:]
     completion_mask = create_completion_mask(completion_ids, model.tokenizer.eos_token_id)
+
     return prompt_ids, prompt_mask, completion_ids, completion_mask
 
 def generate_rollout_data(model, ref_model, batch_samples, num_generations, max_completion_length):
     """
-    Generates data for GRPO rollouts including completions and log probabilities.
+    Generates data for GRPO rollouts including prompt and completion tokens.
     """
-    # cache device
     device = model.device
 
-    # Construct prompts by concatenating 'desc' and 'question'
+    # Build text prompts for logging/reward purposes.
     prompts = [d + q for d, q in zip(batch_samples["desc"], batch_samples["question"])]
     answers = batch_samples["label"]
 
-    # Generate completions using the current policy model.
     with torch.no_grad():
         prompt_ids, prompt_mask, completion_ids, completion_mask = generate_completions(
             model,
-            batch_samples,  # passing the full dictionary as expected
+            batch_samples,
             num_generations,
             max_completion_length
         )
 
-    # Ensure all tensors are on the same device
+    # Move tensors to the correct device
     prompt_ids = prompt_ids.to(device)
     prompt_mask = prompt_mask.to(device)
     completion_ids = completion_ids.to(device)
     completion_mask = completion_mask.to(device)
 
-    # Combine prompt and completion tokens.
-    input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-    attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
     logits_to_keep = completion_ids.size(1)
-    old_log_probs = compute_log_probs(model, input_ids, attention_mask, logits_to_keep)
-    ref_log_probs = compute_log_probs(ref_model, input_ids, attention_mask, logits_to_keep)
 
-    # Format completions and prepare repeated prompts/answers for reward calculation.
+    # Compute log probabilities with multimodal inputs for both policy and reference models.
+    old_log_probs = compute_log_probs_multimodal(model, batch_samples, prompt_ids, completion_ids, logits_to_keep)
+    ref_log_probs = compute_log_probs_multimodal(ref_model, batch_samples, prompt_ids, completion_ids, logits_to_keep)
+
+    # Decode completions for reward computation
     decoded = model.tokenizer.batch_decode(completion_ids, skip_special_tokens=True)
     formatted_completions = [[{"content": d}] for d in decoded]
     repeated_prompts = [p for p in prompts for _ in range(num_generations)]
     repeated_answers = [a for a in answers for _ in range(num_generations)]
-    return {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
+
+    rollout = {
+        "samples": batch_samples,  # Pass original samples to compute graph embeddings
+        "prompt_ids": prompt_ids,
+        "prompt_mask": prompt_mask,
+        "completion_ids": completion_ids,
         "completion_mask": completion_mask,
         "old_log_probs": old_log_probs,
         "ref_log_probs": ref_log_probs,
@@ -392,7 +472,7 @@ def generate_rollout_data(model, ref_model, batch_samples, num_generations, max_
         "batch_size": len(prompts),
         "num_generations": num_generations
     }
-
+    return rollout
 
 def grpo_loss(model, ref_model, rollout_data, reward_function, beta=0.01, epsilon=0.2):
     """
@@ -455,7 +535,6 @@ def grpo_loss(model, ref_model, rollout_data, reward_function, beta=0.01, epsilo
     loss = -((per_token_loss * completion_mask).sum(dim=1) / (completion_mask.sum(dim=1) + 1e-8)).mean()
     return loss, avg_reward
 
-
 def train_with_grpo(model, 
                     train_dataloader, 
                     num_iterations=1, 
@@ -500,6 +579,7 @@ def train_with_grpo(model,
 
             optimizer.zero_grad()
             cumulative_loss = 0.0
+            reward = 0.0
             # accumulate gradients over mu iterations
             for grpo_iter in range(mu):
                 with torch.amp.autocast("cuda"):
@@ -511,10 +591,12 @@ def train_with_grpo(model,
                         beta=beta,
                         epsilon=epsilon
                     )
-                cumulative_loss += loss.item()
+                cumulative_loss += loss
+                reward += avg_reward
             
             # normalize the loss by mu and take a step
             cumulative_loss /= mu
+            reward /= mu
             scaler.scale(cumulative_loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
@@ -522,8 +604,8 @@ def train_with_grpo(model,
             scaler.update()
 
             wandb.log({
-                "loss": loss.item(),
-                "average_reward": avg_reward,
+                "loss": cumulative_loss.item(),
+                "average_reward": reward,
                 "iteration": iteration + 1,
                 "step": step + 1,
                 "grpo_iter": grpo_iter + 1
@@ -539,7 +621,6 @@ def train_with_grpo(model,
 # ---------------------
 ## TRAINING
 # ---------------------
-
 if __name__ == "__main__":
     print("\nInitial model evaluation before finetuning:")
     pre_grpo_accuracy = evaluate_model(model, next(iter(loader)))
@@ -563,5 +644,5 @@ if __name__ == "__main__":
     print(f"Post-GRPO Accuracy: {post_grpo_accuracy:.2f}%")
 
     print("\nSaving GRPO fine-tuned model...")
-    model.model.save_pretrained("grpo_finetuned_model")
-    model.tokenizer.save_pretrained("grpo_finetuned_model")
+    model.model.save_pretrained("models/grpo_finetuned_model")
+    model.tokenizer.save_pretrained("models/grpo_finetuned_model")
