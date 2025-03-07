@@ -520,8 +520,6 @@ def train_with_grpo(model,
                 # Reinitialize the iterator if the DataLoader is exhausted.
                 data_iter = iter(train_dataloader)
                 batch_samples = next(data_iter)
-            
-            print(batch_samples)
 
             # Generate rollout data without tracking gradients.
             with torch.no_grad():
