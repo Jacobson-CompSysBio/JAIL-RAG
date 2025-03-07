@@ -15,6 +15,7 @@ from tqdm.auto import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader, Dataset
 from torch.nn.utils.rnn import pad_sequence
 
 # Hugging Face libraries for transformer models
@@ -81,347 +82,151 @@ os.environ["WANDB_PROJECT"] = os.getenv("WANDB_PROJECT")
 os.environ["WANDB_ENTITY"] = os.getenv("WANDB_ENTITY")
 
 # set visible devices to gpus 0-3
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3,4,5,6,7"
 
-# -----------------------------------------
-## FORMATTING + ANSWER EXTRACTION FUNCTIONS
-# -----------------------------------------
-SYSTEM_PROMPT = """
-Respond in the following format:
-<reasoning>
-...
-</reasoning>
-<answer>
-...
-</answer>
-"""
+T = 512
 
-def extract_answer_from_model_output(text):
-   """
-   Extracts the value from the last <answer> tag in the text.
+# get dataset to see what we're working with
+path = "../data/subgraphs/all/"
+dataset = BiologicalDataset(path)
+loader = DataLoader(dataset, batch_size=1, shuffle=True, collate_fn=collate_fn)
 
-   Args:
-       text (str): The model-generated text containing XML-style <answer> tags.
+# load model to see what we're working with
+model = GraphLLM(max_txt_len=T,
+                max_new_tokens=200,
+                llm_model_path='meta-llama/Meta-Llama-3.1-8B-Instruct',
+                llm_frozen=False, # set frozen to false so we can train with RL
+                fsdp=False, 
+                )
 
-   Returns:
-       str or None: The content inside the <answer> tags, or None if no valid answer is found.
-
-   Explanation:
-       1. Splits the text on the <answer> tag to isolate content after the tag.
-       2. Checks if at least one <answer> tag exists in the text.
-       3. For the last <answer> segment:
-          - Verifies it contains a closing </answer> tag.
-          - Extracts only the content between the tags.
-       4. Returns None if the answer is empty (just "...") or if tags are missing.
-   """
-   # Split on <answer> and take everything after the last occurrence
-   parts = text.split("<answer>")
-   if len(parts) < 2:  # No <answer> tag found
-       return None
-   last_part = parts[-1]
-
-   # Extract content up to </answer>
-   if "</answer>" not in last_part:
-       return None
-   answer = last_part.split("</answer>")[0].strip()
-   return None if answer == "..." else answer
-
-# -----------------------
-## DATASET PREP FUNCTIONS
-# -----------------------
-def build_prompt(messages):
-   """
-   Build a single prompt string from a list of messages.
-
-   Args:
-       messages (list): A list of message dictionaries, each with 'role' and 'content' keys.
-
-   Returns:
-       str: A concatenated string of all message contents.
-   """
-   return "\n".join([msg["content"].strip() for msg in messages])
-
-def prepare_dataset(example):
+def extract_answer(text):
     """
-    prepare 
+    Extract answer from the model output.
 
     Args:
-        dataset: dict containing "question", "scope", "label", "desc", "graph"
+        text (str): The model output text.
     
     Returns:
-        list: a list of formatted examples, each containing a prompt string and an answer
+        str: The extracted answer.
+    """
+    
+    # extract answer from prediction
+    ans = ''.join(re.findall(r"<answer>(.*?)</answer>", text)[-1]) 
+    ans = ans.lower() 
+    return ans
+
+
+def evaluate_model(model, batch):
+    """
+    Evaluate the model on a set of examples provided by a PyTorch DataLoader.
+
+    Args:
+        model (GraphLLM): The model to evaluate.
+        dataloader (torch.utils.data.DataLoader): A DataLoader yielding evaluation batches.
+            Each batch is expected to be a dictionary with keys such as 'id', 'question', 
+            'scope', 'label', 'desc', and 'graph'. The values for 'label', 'desc', and 'question'
+            should be lists (or tensors in the case of labels) of the same batch size.
+
+    Returns:
+        float: The accuracy of the model on the evaluation examples.
+    
+    References:
+        - PyTorch DataLoader documentation: https://pytorch.org/docs/stable/data.html
+        - Accelerate library for device placement and distributed inference: https://huggingface.co/docs/accelerate 
+    """
+    model.eval()
+    correct = 0
+
+    batch_size = len(batch["label"])
+    print("\n" + "=" * 50)
+    print(f"EVALUATION ON {batch_size} EXAMPLES")
+    print("=" * 50)
+
+    # Perform model inference on the whole batch with no gradient computation.
+    with torch.no_grad():
+        outputs = model.inference(batch)
+
+    # Assume outputs["pred"] is a list or tensor of predictions of length equal to batch_size.
+    for i in range(batch_size):
+        # Extract the predicted answer for this example.
+        predicted = extract_answer(outputs["pred"][i])
+        expected = batch["label"][i]
+        is_correct = (predicted == expected)
+        if is_correct:
+            correct += 1
+
+        # Print details for this example.
+        print("\nPrompt:")
+        print(batch["desc"][i] + ' ' + batch["question"][i])
+        print("\nExpected Answer:")
+        print(expected)
+        print("\nExtracted Answer:")
+        print(predicted)
+        print("\nFull Generated Response:")
+        # If outputs["pred"] is a tensor or list of strings, print accordingly.
+        print(outputs["pred"][i])
+        print("\nCorrect:", "✓" if is_correct else "✗")
+        print("-" * 50)
+
+    accuracy = (correct / batch_size) * 100
+    print(f"\nAccuracy: {accuracy:.2f}% ({correct}/{batch_size})")
+    print("=" * 50)
+
+    # Switch model back to training mode after evaluation.
+    model.train()
+    return accuracy
+
+
+# function to reward formatting
+def reward_format(gt, pred):
+    """
+    if the answer is in the correct format, reward 1.25, else reward -1
+    """
+    
+    # answer format
+    pattern = r"^<think>.*?</think><answer>.*?</answer>$"
+
+    return 1.25 if re.match(pattern, pred, re.DOTALL | re.VERBOSE) else -1
+
+# define reward function for node connectivity
+def reward_correct_yn(gt, pred) -> int: 
+    """
+    given a yes/no answer and ground truth, return 1 if correct, -1 if incorrect
     """
 
-    # load data
+    # extract answer from prediction
+    ans = ''.join(re.findall(r"<answer>(.*?)</answer>", pred)) 
+    ans = ans.lower() 
 
-    # loop through examples, format, add to new dataset
-    prompt_str = build_prompt([
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": example["question"]}
-    ])
-    formatted_example = {
-        "prompt": prompt_str,
-        "answer": example["label"]
-    }
-    return formatted_example
-
-# ---------------
-## EVAL FUNCTIONS
-# ---------------
-def extract_last_number(text):
-   """
-   Extracts the last number appearing in the text.
-
-   Args:
-       text (str): The text to extract a number from.
-
-   Returns:
-       float or None: The last number in the text, or None if no number is found.
-
-   Explanation:
-       1. Removes dollar signs and percent symbols from the text.
-       2. Uses regex to find a number that appears at the end of the text (possibly after whitespace).
-       3. The pattern matches numbers that appear at the end of the string, with or without decimal points.
-       4. Returns the found number as a float, or None if no match is found.
-   """
-   text = text.replace('$', '').replace('%', '')
-   pattern = r'(?:^|\s|=)\s*(-?\d*\.?\d+)\s*$'
-   match = re.search(pattern, text)
-   return float(match.group(1)) if match else None
-
-def extract_single_number(text):
-   """
-   Extracts a single number from text if exactly one number is present.
-
-   Args:
-       text (str): The text to extract a number from.
-
-   Returns:
-       float or None: The single number in the text, or None if zero or multiple numbers are found.
-
-   Explanation:
-       1. Uses regex to find all numbers in the text (including negative numbers and decimals).
-       2. If exactly one number is found, returns it as a float.
-       3. If zero or multiple numbers are found, returns None.
-   """
-   numbers = re.findall(r'-?\d*\.?\d+', text)
-   return float(numbers[0]) if len(numbers) == 1 else None
-
-def evaluate_model(model, tokenizer, eval_examples, device):
-   """
-   Evaluates the model on a set of examples and prints detailed results.
-
-   Args:
-       model: The language model to evaluate.
-       tokenizer: The tokenizer for encoding inputs and decoding outputs.
-       eval_examples (list): List of evaluation examples, each containing "prompt" and "answer".
-       device: The device (CPU or GPU) to run evaluation on.
-
-   Returns:
-       float: The accuracy percentage (correct predictions / total examples * 100).
-
-   Explanation:
-       1. Sets the model to evaluation mode.
-       2. For each example in the evaluation set:
-          - Encodes the prompt and generates a response using the model.
-          - Extracts the predicted answer from the generated response.
-          - Compares the predicted answer with the expected answer using multiple methods:
-            a. Exact string matching
-            b. Single number extraction and comparison
-            c. Last number extraction and comparison
-          - Prints detailed information about each example.
-       3. Calculates and returns the overall accuracy.
-       4. Returns the model to training mode.
-   """
-   model.eval()
-   correct = 0
-   total = len(eval_examples)
-   print("\n" + "="*50)
-   print("EVALUATION ON", total, "EXAMPLES")
-   print("="*50)
-
-   for example in eval_examples:
-       # Get the prompt and expected answer
-       full_prompt = example["prompt"]
-       expected = example["answer"]
-
-       # Tokenize and generate response
-       inputs = tokenizer.encode(full_prompt, return_tensors="pt").to(device)
-       with torch.no_grad():
-           outputs = model.generate(
-               inputs,
-               max_new_tokens=512,
-               temperature=0.7,
-               num_return_sequences=1,
-               pad_token_id=tokenizer.pad_token_id,
-               eos_token_id=tokenizer.eos_token_id,
-               forced_eos_token_id=tokenizer.eos_token_id,
-               early_stopping=False,
-           )
-       response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-       try:
-           # Extract answer and check correctness
-           predicted = extract_answer_from_model_output(response)
-
-           # Try different matching methods
-           if predicted == expected:  # Exact match
-               is_correct = True
-           else:
-               # Try single number matching
-               pred_num = extract_single_number(str(predicted))
-               exp_num = extract_single_number(str(expected))
-               if pred_num is not None and exp_num is not None and pred_num == exp_num:
-                   is_correct = True
-               else:
-                   # Try last number matching
-                   pred_num = extract_last_number(str(predicted))
-                   exp_num = extract_last_number(str(expected))
-                   is_correct = (pred_num is not None and exp_num is not None and
-                               pred_num == exp_num)
-
-           # Update counter for correct answers
-           if is_correct:
-               correct += 1
-
-           # Print evaluation details
-           print("\nPrompt:")
-           print(full_prompt)
-           print("\nExpected Answer:")
-           print(expected)
-           print("\nExtracted Answer:")
-           print(predicted)
-           print("\nFull Generated Response:")
-           print(response)
-           print("\nCorrect:", "✓" if is_correct else "✗")
-           print("-"*50)
-
-       except Exception as e:
-           print("\nFailed to parse model output for prompt:")
-           print(full_prompt)
-           print("Error:", e)
-           print("-"*50)
-
-   # Calculate and print final accuracy
-   accuracy = (correct / total) * 100
-   print(f"\nAccuracy: {accuracy:.2f}% ({correct}/{total})")
-   print("="*50)
-
-   # Return model to training mode
-   model.train()
-   return accuracy
-
-# -----------------
-## REWARD FUNCTIONS
-# -----------------
-def correctness_reward(prompts, completions, answer, **kwargs):
-   """
-   Assigns a reward based on the correctness of the model's answer.
-
-   Args:
-       prompts (list): List of input prompts.
-       completions (list): List of model completions, each containing content.
-       answer (list): List of expected answers.
-       **kwargs: Additional keyword arguments.
-
-   Returns:
-       list: List of numerical rewards for each completion.
-
-   Explanation:
-       1. Extracts the content from each completion.
-       2. Extracts the answer portion from each response using extract_answer_from_model_output.
-       3. Assigns rewards based on matching criteria:
-          - 2.0 points for an exact match
-          - 1.5 points for numeric equivalence (when values match but format differs)
-          - 0.0 points for incorrect answers
-       4. Tracks completion lengths for analysis.
-   """
-   responses = [completion[0]['content'] for completion in completions]
-   extracted = [extract_answer_from_model_output(r) for r in responses]
-   rewards = []
-   for r, a in zip(extracted, answer):
-       if r == a:  # Exact match case
-           rewards.append(2.0)
-       else:
-           # Try numeric equivalence
-           r_num = extract_single_number(str(r))
-           a_num = extract_single_number(str(a))
-           if r_num is not None and a_num is not None and r_num == a_num:
-               rewards.append(1.5)
-           else:
-               rewards.append(0.0)
-   # Log completion lengths
-   completion_lengths = [len(response.split()) for response in responses]
-   return rewards
-
-def format_reward(completions, **kwargs):
-   """
-   Assigns a reward for adhering to the desired XML format.
-
-   Args:
-       completions (list): List of model completions, each containing content.
-       **kwargs: Additional keyword arguments.
-
-   Returns:
-       list: List of format compliance scores for each completion.
-
-   Explanation:
-       1. Extracts the content from each completion.
-       2. Evaluates format compliance by checking for required XML tags:
-          - 0.2 points for each tag present (<reasoning>, </reasoning>, <answer>, </answer>)
-          - Maximum score of 0.8 for perfect format compliance
-       3. Stores and returns the format compliance scores.
-   """
-   responses = [completion[0]['content'] for completion in completions]
-   rewards = []
-   format_scores = []
-   for response in responses:
-       score = 0.0
-       if "<reasoning>" in response: score += 0.2
-       if "</reasoning>" in response: score += 0.2
-       if "<answer>" in response: score += 0.2
-       if "</answer>" in response: score += 0.2
-       rewards.append(score)
-       format_scores.append(score)
-   return rewards
-
+    # if the model produced an answer, compare it to the ground truth - return 1 if correct, -1 if incorrect
+    if ans == gt:
+        return 1
+    else:
+        return -1
+    
 def combined_reward(prompts, completions, answer):
-   """
-   Combines correctness and format rewards.
+    """
+    Combined reward function for yes/no questions and answer formatting.
+    
+    Args:
+        prompts (list): List of prompt strings (unused in this example, but available for context).
+        completions (list): List where each element is a list of dictionaries representing generated completions.
+                            Each dictionary should have a key 'content' with the generated text.
+        answer (list): List of ground truth answers.
+        
+    Returns:
+        list: A list of reward values computed for each sample.
+    """
+    rewards = []
+    # Loop over each sample's ground truth and generated completions.
+    for gt, comp in zip(answer, completions):
+        # For simplicity, use the first completion for computing the reward.
+        pred = comp[0]['content']
+        r1 = reward_correct_yn(gt, pred)
+        r2 = reward_format(gt, pred)
+        rewards.append(r1 + r2)
+    return rewards
 
-   Args:
-       prompts (list[str]): List of prompt texts
-       completions (list[list[dict]]): List of completion dictionaries
-       answer (list[str]): List of expected answers
-
-   Returns:
-       list[float]: Combined rewards for each prompt-completion pair
-
-   Explanation:
-       1. Calculates separate rewards for correctness and format compliance.
-       2. Combines the rewards with the following weights:
-          - Correctness score range: 0.0 to 2.0
-          - Format score range: 0.0 to 0.8
-          - Total possible range: 0.0 to 2.8
-       3. Returns the combined reward for each example.
-   """
-   # Get individual rewards
-   correctness_scores = correctness_reward(prompts=prompts, completions=completions, answer=answer)
-   format_scores = format_reward(completions=completions)
-
-   # Combine rewards - correctness is weighted more heavily
-   combined_rewards = []
-   for c_score, f_score in zip(correctness_scores, format_scores):
-       # Correctness score range: 0.0 to 2.0
-       # Format score range: 0.0 to 0.8
-       # Total range: 0.0 to 2.8
-       combined_rewards.append(c_score + f_score)
-
-   return combined_rewards
-
-# ------------------------
-## GRPO TRAINING FUNCTIONS
-# ------------------------
 def selective_log_softmax(logits, input_ids):
     """
     Computes log probabilities for specific tokens in the vocabulary.
@@ -443,27 +248,28 @@ def selective_log_softmax(logits, input_ids):
 
 def compute_log_probs(model, input_ids, attention_mask, logits_to_keep):
     """
-    Computes the log probabilities for a batch of tokens.
+    Computes log probabilities for the last `logits_to_keep` tokens using the underlying transformer model.
 
     Args:
-        model: The language model.
-        input_ids (torch.Tensor): Token IDs for input sequences.
-        attention_mask (torch.Tensor): Attention mask for input sequences.
-        logits_to_keep (int): Number of tokens to keep from the end of the sequence.
+        model (GraphLLM): The GraphLLM instance.
+        input_ids (torch.Tensor): Tensor of input token IDs.
+        attention_mask (torch.Tensor): Attention mask corresponding to the input IDs.
+        logits_to_keep (int): Number of tokens (from the end of the sequence) to compute log probabilities for.
 
     Returns:
-        torch.Tensor: Log probabilities of the selected tokens.
-
-    Explanation:
-        1. Gets logits from the model for the input sequence.
-        2. Selects logits for all tokens except the last one (as we predict next tokens).
-        3. Selects only the last 'logits_to_keep' tokens from both logits and input_ids.
-        4. Computes log probabilities for these tokens using selective_log_softmax.
+        torch.Tensor: Log probabilities for the selected tokens.
     """
-    logits = model(input_ids=input_ids, attention_mask=attention_mask).logits[:, :-1, :]
-    input_ids = input_ids[:, -logits_to_keep:]
-    logits = logits[:, -logits_to_keep:, :]
-    return selective_log_softmax(logits, input_ids)
+    # Call the underlying transformer model directly, since it accepts input_ids and attention_mask.
+    outputs = model.model(input_ids=input_ids, attention_mask=attention_mask)
+    
+    # Slice to get the logits for the last `logits_to_keep` tokens.
+    logits = outputs.logits[:, -logits_to_keep:, :]
+    
+    # Also slice the input_ids to match the logits.
+    trimmed_input_ids = input_ids[:, -logits_to_keep:]
+    
+    # Use your custom selective log softmax to compute log probabilities.
+    return selective_log_softmax(logits, trimmed_input_ids)
 
 def create_completion_mask(completion_ids, eos_token_id):
     """
@@ -489,7 +295,7 @@ def create_completion_mask(completion_ids, eos_token_id):
     sequence_indices = torch.arange(is_eos.size(1), device=completion_ids.device).expand(is_eos.size(0), -1)
     return (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
-def generate_completions(model, tokenizer, prompts, num_generations=4, max_completion_length=32):
+def generate_completions(model, batch, num_generations=4, max_completion_length=32):
     """
     Generates multiple completions for each prompt.
 
@@ -510,68 +316,67 @@ def generate_completions(model, tokenizer, prompts, num_generations=4, max_compl
         4. Extracts the completion IDs (excluding the prompt tokens).
         5. Creates a mask for the completions using create_completion_mask.
     """
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    inputs = tokenizer(prompts, return_tensors="pt", padding=True, padding_side="left")
-    prompt_ids = inputs["input_ids"].to(device)
-    prompt_mask = inputs["attention_mask"].to(device)
-    print(f"Input batch size: {prompt_ids.size(0)}, Device before model: {prompt_ids.device}")
+
+    # tokenize prompt inputs
+    prompt_inputs = [batch["desc"][i] + batch["question"][i] for i in range(len(batch["desc"]))]
+    inputs = model.tokenizer(prompt_inputs, return_tensors="pt", padding=True, padding_side="left")
+    prompt_ids = inputs["input_ids"]
+    prompt_mask = inputs["attention_mask"]
+    print(f"Input batch size: {prompt_ids.size(0)}")
+
     prompt_length = prompt_ids.size(1)
     prompt_ids = prompt_ids.repeat_interleave(num_generations, dim=0)
     prompt_mask = prompt_mask.repeat_interleave(num_generations, dim=0)
-    outputs = model.generate(
-        prompt_ids,
-        attention_mask=prompt_mask,
-        max_new_tokens=max_completion_length,
-        do_sample=True,
-        temperature=1.0,
-        pad_token_id=tokenizer.pad_token_id,
-        eos_token_id=tokenizer.eos_token_id,
-        early_stopping=False
-    )
-    print(f"Output batch size: {outputs.size(0)}, Device after model: {outputs.device}")
-    completion_ids = outputs[:, prompt_length:]
-    completion_mask = create_completion_mask(completion_ids, tokenizer.eos_token_id)
+
+    outputs = model.inference(batch, num_generations=num_generations)
+
+    print(f"Output batch size: {outputs['out_ids'].size(0)}")
+    completion_ids = outputs["out_ids"][:, prompt_length:]
+    completion_mask = create_completion_mask(completion_ids, model.tokenizer.eos_token_id)
     return prompt_ids, prompt_mask, completion_ids, completion_mask
 
-def generate_rollout_data(model, ref_model, tokenizer, batch_samples, num_generations, max_completion_length):
+def generate_rollout_data(model, ref_model, batch_samples, num_generations, max_completion_length):
     """
     Generates data for GRPO rollouts including completions and log probabilities.
-
-    Args:
-        model: The policy model being trained.
-        ref_model: The reference model for KL divergence calculation.
-        tokenizer: The tokenizer for encoding and decoding text.
-        batch_samples (list): Batch of training samples.
-        num_generations (int): Number of completions to generate per sample.
-        max_completion_length (int): Maximum completion length.
-
-    Returns:
-        dict: Dictionary containing all data needed for GRPO updates.
-
-    Explanation:
-        1. Extracts prompts and expected answers from the batch samples.
-        2. Generates completions using the current policy model.
-        3. Combines prompt and completion tokens.
-        4. Computes log probabilities from both the policy model and reference model.
-        5. Formats completions for reward calculation.
-        6. Repeats prompts and answers to match the number of generated completions.
-        7. Returns all data needed for GRPO loss calculation.
     """
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    prompts = [sample["prompt"] if isinstance(sample, dict) else sample[0] for sample in batch_samples]
-    answers = [sample["answer"] if isinstance(sample, dict) else sample[1] for sample in batch_samples]
+    # cache device
+    device = model.device
+
+    # Construct prompts by concatenating 'desc' and 'question'
+    prompts = [d + q for d, q in zip(batch_samples["desc"], batch_samples["question"])]
+    answers = batch_samples["label"]
+
+    # Generate completions using the current policy model.
     with torch.no_grad():
         prompt_ids, prompt_mask, completion_ids, completion_mask = generate_completions(
-            model, tokenizer, prompts, num_generations, max_completion_length
+            model,
+            batch_samples,  # passing the full dictionary as expected
+            num_generations,
+            max_completion_length
         )
-        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(1)
-        old_log_probs = compute_log_probs(model, input_ids, attention_mask, logits_to_keep)
-        ref_log_probs = compute_log_probs(ref_model, input_ids, attention_mask, logits_to_keep)
-    formatted_completions = [[{'content': tokenizer.decode(ids, skip_special_tokens=True)}] for ids in completion_ids]
+
+    # Ensure all tensors are on the same device
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    prompt_ids = prompt_ids.to(device)
+    prompt_mask = prompt_mask.to(device)
+    completion_ids = completion_ids.to(device)
+    completion_mask = completion_mask.to(device)
+
+    # Combine prompt and completion tokens.
+    input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+    attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+    logits_to_keep = completion_ids.size(1)
+    old_log_probs = compute_log_probs(model, input_ids, attention_mask, logits_to_keep)
+    ref_log_probs = compute_log_probs(ref_model, input_ids, attention_mask, logits_to_keep)
+
+    # Format completions and prepare repeated prompts/answers for reward calculation.
+    formatted_completions = [
+        [{'content': model.tokenizer.decode(ids, skip_special_tokens=True)}]
+        for ids in completion_ids
+    ]
     repeated_prompts = [p for p in prompts for _ in range(num_generations)]
     repeated_answers = [a for a in answers for _ in range(num_generations)]
+
     return {
         "input_ids": input_ids,
         "attention_mask": attention_mask,
@@ -586,7 +391,8 @@ def generate_rollout_data(model, ref_model, tokenizer, batch_samples, num_genera
         "num_generations": num_generations
     }
 
-def grpo_loss(model, ref_model, rollout_data, tokenizer, reward_function, beta=0.01, epsilon=0.2):
+
+def grpo_loss(model, ref_model, rollout_data, reward_function, beta=0.01, epsilon=0.2):
     """
     Computes the GRPO loss for updating the policy model.
 
@@ -626,7 +432,7 @@ def grpo_loss(model, ref_model, rollout_data, tokenizer, reward_function, beta=0
         dtype=torch.float32,
         device=device
     )
-    #print(f"Rewards: {rewards}")  # Debug rewards
+
     batch_size = rollout_data["batch_size"]
     num_generations = rollout_data["num_generations"]
     rewards = rewards.view(batch_size, num_generations)
@@ -645,20 +451,27 @@ def grpo_loss(model, ref_model, rollout_data, tokenizer, reward_function, beta=0
     loss = -((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
     return loss, avg_reward
 
-def train_with_grpo(model, tokenizer, train_data, num_iterations=1, num_steps=500, batch_size=4,
-                              num_generations=4, max_completion_length=128, beta=0.1,
-                              learning_rate=5e-6, mu=3, epsilon=0.2, reward_function=None, device_ids=None):
+
+def train_with_grpo(model, 
+                    train_dataloader, 
+                    num_iterations=1, 
+                    num_steps=500, 
+                    num_generations=4, 
+                    max_completion_length=128, 
+                    beta=0.1,
+                    learning_rate=5e-6, 
+                    mu=3, 
+                    epsilon=0.2, 
+                    reward_function=None, 
+                    device_ids=None):
     """
-    This function is your original working code (train_with_grpo_static)
-    with an added outer loop for iterative GRPO updates per the pseudocode.
+    Modified GRPO training function that accepts a DataLoader as input.
 
     Args:
         model: The language model to train.
-        tokenizer: The tokenizer for encoding and decoding text.
-        train_data (list): Training dataset.
+        train_dataloader (DataLoader): PyTorch DataLoader providing batched training data.
         num_iterations (int): Number of outer iterations (reference model updates).
         num_steps (int): Number of batch updates per iteration.
-        batch_size (int): Number of prompts per batch.
         num_generations (int): Number of completions per prompt.
         max_completion_length (int): Maximum token length for completions.
         beta (float): KL penalty coefficient.
@@ -675,29 +488,20 @@ def train_with_grpo(model, tokenizer, train_data, num_iterations=1, num_steps=50
         1. For each outer iteration:
            - Creates a reference model as a deep copy of the current policy model.
            - Reinitializes the optimizer for the policy model.
-           - For each training step:
-             a. Samples a batch of examples from the training data.
+           - Iterates over the DataLoader for num_steps:
+             a. Retrieves a batch from the DataLoader.
              b. Generates rollout data including completions and log probabilities.
              c. For mu iterations:
                 i. Computes the GRPO loss.
                 ii. Updates the policy model using gradient descent.
            - Monitors GPU memory usage and prints progress information.
     """
-    assert device_ids is not None and len(device_ids) > 1, "This code needs at least 2 GPU cores to run!"
-
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-    # Wrap model with DataParallel if multiple GPUs are available.
-
-    model = nn.DataParallel(model, device_ids=device_ids)
-    print(f"Model wrapped with DataParallel across GPUs: {device_ids}")
-
     # Outer loop: iterative GRPO updates.
     for iteration in range(num_iterations):
         print(f"\nIteration {iteration+1}/{num_iterations}")
 
         # Create a reference model (deep copy) and set it to eval mode.
-        ref_model = copy.deepcopy(model.module)
+        ref_model = copy.deepcopy(model)
         ref_model.eval()
         for param in ref_model.parameters():
             param.requires_grad = False
@@ -707,24 +511,34 @@ def train_with_grpo(model, tokenizer, train_data, num_iterations=1, num_steps=50
         optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
         model.train()
 
-        # Inner loop: your original training steps.
+        # Create an iterator from the DataLoader.
+        data_iter = iter(train_dataloader)
         for step in range(num_steps):
-            batch_samples = random.sample(train_data, batch_size)
+            try:
+                batch_samples = next(data_iter)
+            except StopIteration:
+                # Reinitialize the iterator if the DataLoader is exhausted.
+                data_iter = iter(train_dataloader)
+                batch_samples = next(data_iter)
+            
+            print(batch_samples)
+
+            # Generate rollout data without tracking gradients.
             with torch.no_grad():
                 rollout_data = generate_rollout_data(
-                    model.module,
+                    model,
                     ref_model,
-                    tokenizer,
                     batch_samples,
                     num_generations,
                     max_completion_length
                 )
+
+            # Perform multiple policy updates (mu iterations) on the same rollout data.
             for grpo_iter in range(mu):
                 loss, avg_reward = grpo_loss(
-                    model.module,
+                    model,
                     ref_model,
                     rollout_data,
-                    tokenizer,
                     reward_function,
                     beta=beta,
                     epsilon=epsilon
@@ -733,7 +547,8 @@ def train_with_grpo(model, tokenizer, train_data, num_iterations=1, num_steps=50
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
                 optimizer.step()
-                # Log to wandb
+
+                # Log training metrics (for example, with wandb)
                 wandb.log({
                     "loss": loss.item(),
                     "average_reward": avg_reward,
@@ -743,98 +558,11 @@ def train_with_grpo(model, tokenizer, train_data, num_iterations=1, num_steps=50
                 })
                 print(f"Iteration {iteration+1}/{num_iterations}, Step {step+1}/{num_steps}, "
                       f"GRPO iter {grpo_iter+1}/{mu}, loss: {loss.item():.4f}")
-                #for i in range(torch.cuda.device_count()):
-                #    print(f"GPU {i} Usage: {torch.cuda.memory_allocated(i) / 1024**2:.2f} MiB, "
-                #          f"Utilization: {torch.cuda.utilization(i)}%")
-                # Uncomment to see the GPU utilization stats
-    return model.module
-
-# -------------
-## TRAIN CONFIG
-# -------------
-def optimize_model_memory(model):
-    """
-    Optimizes the model to use less memory during training.
-
-    Args:
-        model: The language model to optimize.
-
-    Returns:
-        The optimized model.
-
-    Explanation:
-        1. Sets the model to training mode.
-        2. Disables KV caching to save memory.
-        3. Enables gradient checkpointing to trade computation for memory.
-        4. Ensures that input embeddings require gradients:
-           - Either uses the built-in method if available.
-           - Or adds a forward hook to the input embeddings layer.
-        5. Returns the optimized model ready for memory-efficient training.
-    """
-    model.train()
-    model.config.use_cache = False
-
-    # First ensure inputs will require gradients
-    if hasattr(model, "enable_input_require_grads"):
-        model.enable_input_require_grads()
-    else:
-        def make_inputs_require_grad(module, input, output):
-            output.requires_grad_(True)
-        model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
-    # Then enable gradient checkpointing
-    model.gradient_checkpointing_enable()
-
     return model
 
-# -----
-## MAIN
-# -----
-
-# Main execution
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-print(f"Using primary device: {device}")
-
-model_name = "meta-llama/Llama-3.1-8B-Instruct"
-output_dir = "math_solver_model"
-
-print("Downloading model...")
-num_gpus = 4 # hard set number of gpus to 4
-print(f"Detected {num_gpus} GPUs")
-device_ids = list(range(num_gpus)) if num_gpus > 1 else None
-model = AutoModelForCausalLM.from_pretrained(
-    model_name,
-    torch_dtype=torch.bfloat16,
-    device_map="auto",
-)
-print("Model downloaded")
-
-tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
-tokenizer.pad_token = tokenizer.eos_token
-model.config.pad_token_id = tokenizer.eos_token_id
-model.config.eos_token_id = tokenizer.eos_token_id
-
-
-gsm8k = load_dataset("openai/gsm8k", "main")["train"]
-data = gsm8k.map(prepare_dataset).remove_columns(["question"])
-all_data = list(data)
-random.shuffle(all_data)
-size_of_eval_data = 1 # just make sure this trains for now
-eval_data = all_data[:size_of_eval_data]
-train_data = all_data[size_of_eval_data:]
-
-print("\nInitial model evaluation before finetuning:")
-pre_grpo_accuracy = evaluate_model(model, tokenizer, eval_data, device)
-print(f"Pre-GRPO Accuracy: {pre_grpo_accuracy:.2f}%")
-
-model = optimize_model_memory(model)
-
-print("\nStarting RL fine-tuning using GRPO...")
-# This config was tested on a 8xA100 node, where each A100 is has 80GB of VRAM
 training_config = {
     'num_iterations': 1,
     'num_steps': 500,
-    'batch_size': 1, # 3 for 4 gpus
     'num_generations': 4, # reduce if you have GPUs with less VRAM
     'max_completion_length': 200, # reduce if you have GPUs with less VRAM
     'beta': 0.04,
@@ -843,26 +571,27 @@ training_config = {
     'epsilon': 0.1
 }
 
+print("\nInitial model evaluation before finetuning:")
+pre_grpo_accuracy = evaluate_model(model, next(iter(loader)))
+print(f"Pre-GRPO Accuracy: {pre_grpo_accuracy:.2f}%")
+
 # Initialize Weights & Biases
 wandb.init(project=os.environ["WANDB_PROJECT"], entity=os.environ["WANDB_ENTITY"], reinit=True)
 print("Weights & Biases initialized.")
 
-model = train_with_grpo(
-    model=model,
-    tokenizer=tokenizer,
-    train_data=train_data,
-    reward_function=combined_reward,
-    device_ids=device_ids,
-    **training_config
+print("\nStarting RL fine-tuning using GRPO...")
+model = train_with_grpo(model, loader,
+                        reward_function=combined_reward,
+                        **training_config
 )
 
 wandb.finish()
 print("Training completed and wandb run finished.")
 
 print("\nFinal model evaluation after GRPO RL fine-tuning:")
-post_grpo_accuracy = evaluate_model(model, tokenizer, eval_data, device)
+post_grpo_accuracy = evaluate_model(model, next(iter(loader)))
 print(f"Post-GRPO Accuracy: {post_grpo_accuracy:.2f}%")
 
 print("\nSaving GRPO fine-tuned model...")
 model.save_pretrained("grpo_finetuned_model")
-tokenizer.save_pretrained("grpo_finetuned_model")
+model.tokenizer.save_pretrained("grpo_finetuned_model")
