@@ -1,3 +1,4 @@
+train.slurm
 *.pyc
 *.txt
 *train_dev.tsv
