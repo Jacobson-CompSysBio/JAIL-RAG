@@ -3,19 +3,16 @@ import torch
 from torch.utils.data import Dataset
 
 SYSTEM_PROMPT = """
-Respond in the following format:
-<think>
-...
-</think>
-<answer>
-...
-</answer>
+A conversation between User and Assistant. The user asks a question, and the Assistant solves it.
+The assistant first thinks about the reasoning process in the mind and then provides the user with the answer.
+The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively.
 """
 
 # ---------------
 ## NORMAL DATASET
 # ---------------
 class BiologicalDataset(Dataset):
+  
   def __init__(self, path: str):
     super().__init__()
 

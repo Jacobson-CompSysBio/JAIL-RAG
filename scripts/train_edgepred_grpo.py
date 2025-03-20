@@ -97,7 +97,6 @@ training_config = {
     'mu': 3,
     'epsilon': 0.1
 }
-
 FORMAT_PATTERN = re.compile(r"^<think>.*?</think><answer>.*?</answer>$", re.DOTALL | re.VERBOSE)
 ANSWER_PATTERN = re.compile(r"<answer>(.*?)</answer>")
 
@@ -120,15 +119,16 @@ model = GraphLLM(max_txt_len=T,
 # ---------------------
 ## EVALUATION FUNCTIONS
 # ---------------------
-def extract_answer(text: str) -> str:
-    """
-    Extract answer from the model output.
-    """
-    matches = ANSWER_PATTERN.findall(text)
-    if matches:
-        return matches[-1].lower()
-    else:
+def extract_answer(text):
+    parts = text.split("<answer>")
+    if len(parts) < 2:
         return ""
+    last_part = parts[-1]
+    if "</answer>" not in last_part:
+        return ""
+    answer = last_part.split("</answer>")[0].strip().lower()
+    return "" if answer == "..." or not answer else answer
+
 
 def evaluate_model(model, batch):
     """
@@ -199,6 +199,28 @@ def reward_format(gt, pred):
     if "</think>" in pred: score += 0.2
     if "<answer>" in pred: score += 0.2
     if "</answer>" in pred: score += 0.2
+    return score
+
+def format_reward(gt, pred):
+    # Check if the response exactly matches the expected pattern
+    if FORMAT_PATTERN.match(pred):
+        score += 1.0
+    else:
+        # Identify if there is extra text after the closing </answer> tag
+        if "</answer>" in pred:
+            trailing_text = pred.split("</answer>")[-1].strip()
+            if trailing_text:
+                # Apply a penalty for extra tokens after the closing tag
+                score -= 0.5  # Adjust penalty value as needed
+        # Provide partial rewards if the key tags are present
+        if "<think>" in pred: 
+            score += 0.2
+        if "</think>" in pred: 
+            score += 0.2
+        if "<answer>" in pred: 
+            score += 0.2
+        if "</answer>" in pred: 
+            score += 0.2
     return score
 
 # define reward function for node connectivity
