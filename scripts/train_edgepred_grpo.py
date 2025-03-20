@@ -84,7 +84,7 @@ os.environ["WANDB_API_KEY"] = os.getenv("WANDB_API_KEY")
 os.environ["WANDB_PROJECT"] = os.getenv("WANDB_PROJECT")
 os.environ["WANDB_ENTITY"] = os.getenv("WANDB_ENTITY")
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3,4,5,6,7"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3,4,5,6,7"
 
 T = 512
 training_config = {
@@ -195,32 +195,55 @@ def reward_format(gt, pred):
     """
 
     score = 0.0
-    if "<think>" in pred: score += 0.2
-    if "</think>" in pred: score += 0.2
-    if "<answer>" in pred: score += 0.2
-    if "</answer>" in pred: score += 0.2
+    # If no answer was extracted, default to an empty string.
+    r_str = pred if pred is not None else ""
+    a_str = gt if gt is not None else ""
+    r_str = r_str.strip().lower()
+    a_str = a_str.strip().lower()
+    # exact match
+    if r_str == a_str:
+        score += 2.0
+    # if the answer is a substring of the response
+    elif a_str in r_str:
+        score += 1.5
+    else:
+        score += 0.0
     return score
 
 def format_reward(gt, pred):
     # Check if the response exactly matches the expected pattern
-    if FORMAT_PATTERN.match(pred):
-        score += 1.0
+    # Count occurrences of each tag
+    think_open_count = pred.count("<think>")
+    think_close_count = pred.count("</think>")
+    answer_open_count = pred.count("<answer>")
+    answer_close_count = pred.count("</answer>")
+    
+    # Check for extra text after the closing answer tag
+    trailing_text = ""
+    if "</answer>" in pred:
+        trailing_text = pred.split("</answer>")[-1].strip()
+    
+    # Reward full points if exactly one set is present and no extra text exists
+    if (think_open_count == 1 and think_close_count == 1 and 
+        answer_open_count == 1 and answer_close_count == 1 and
+        trailing_text == "" and pred.strip().endswith("</answer>")):
+        score += 1.5
     else:
-        # Identify if there is extra text after the closing </answer> tag
-        if "</answer>" in pred:
-            trailing_text = pred.split("</answer>")[-1].strip()
-            if trailing_text:
-                # Apply a penalty for extra tokens after the closing tag
-                score -= 0.5  # Adjust penalty value as needed
-        # Provide partial rewards if the key tags are present
-        if "<think>" in pred: 
+        # Apply partial rewards/penalties based on deviations
+        # Reward for having at least one pair
+        if think_open_count == 1 and think_close_count == 1:
             score += 0.2
-        if "</think>" in pred: 
+        else:
+            score -= 0.1 * (abs(think_open_count - 1) + abs(think_close_count - 1))
+        
+        if answer_open_count == 1 and answer_close_count == 1:
             score += 0.2
-        if "<answer>" in pred: 
-            score += 0.2
-        if "</answer>" in pred: 
-            score += 0.2
+        else:
+            score -= 0.1 * (abs(answer_open_count - 1) + abs(answer_close_count - 1))
+        
+        # Penalize extra text after </answer>
+        if trailing_text:
+            score -= 0.5
     return score
 
 # define reward function for node connectivity
@@ -308,75 +331,55 @@ def compute_log_probs(model, input_ids, attention_mask, logits_to_keep):
     # Use your custom selective log softmax to compute log probabilities.
     return selective_log_softmax(logits, trimmed_input_ids)
 
-def compute_log_probs_multimodal(model, samples, prompt_ids, completion_ids, logits_to_keep):
-    """
-    Computes log probabilities for the last `logits_to_keep` tokens using multimodal inputs.
-    
-    Instead of feeding only token IDs to the underlying transformer, this function first builds
-    a full embedding sequence by concatenating:
-       1. The BOS token embedding.
-       2. The graph embedding (computed from the input graphs and passed through the projector).
-       3. The token embeddings of the prompt text.
-       4. The token embeddings of the generated completions.
-       
-    The resulting embeddings (and a corresponding attention mask) are then fed to the transformer.
-    
-    Args:
-        model (GraphLLM): Your multimodal model instance.
-        samples (dict): Batch samples containing keys like "desc", "question", and "graph".
-        prompt_ids (torch.Tensor): Tensor of prompt token IDs (e.g., derived from [desc]+[question]).
-                                   Shape: (batch_size, prompt_seq_len)
-        completion_ids (torch.Tensor): Tensor of generated completion token IDs.
-                                       Shape: (batch_size, comp_seq_len)
-        logits_to_keep (int): Number of tokens (from the completion) for which to compute log probabilities.
-    
-    Returns:
-        torch.Tensor: Log probabilities for the selected tokens. Shape: (batch_size, logits_to_keep)
-    """
+def compute_log_probs_multimodal(model, samples, prompt_ids, completion_ids, logits_to_keep, num_generations):
     device = model.device
-    batch_size = prompt_ids.size(0)
     
     # Retrieve constant embeddings
-    bos_embeds = model.bos_embeds   # Shape: (1, embed_dim)
-    pad_embeds = model.pad_embeds   # Shape: (1, embed_dim)
+    bos_embeds = model.bos_embeds
+    pad_embeds = model.pad_embeds
     
-    # Compute graph embeddings from the input samples and project them
-    graph_embeds = model.encode_graphs(samples)    # (batch_size, embed_dim)
-    graph_embeds = model.projector(graph_embeds)     # (batch_size, proj_dim)
-    
-    # Compute token embeddings for the prompt text
-    token_embeds = model.word_embedding(prompt_ids)  # (batch_size, prompt_seq_len, embed_dim)
-    
-    # Build the full prompt embeddings for each sample: [BOS] + [Graph] + [Token Embeds]
+    # Compute graph embeddings and repeat them
+    graph_embeds = model.encode_graphs(samples)
+    graph_embeds = model.projector(graph_embeds)
+    graph_embeds = graph_embeds.repeat_interleave(num_generations, dim=0)
+
+    token_embeds = model.word_embedding(prompt_ids)
+
     full_prompt_embeds = []
-    for i in range(batch_size):
-        # Concatenate: BOS token (1, D), graph embedding (1, D) and token embeddings (L, D)
-        sample_embeds = torch.cat([bos_embeds, graph_embeds[i].unsqueeze(0), token_embeds[i]], dim=0)
+    for i in range(prompt_ids.size(0)):
+        sample_embeds = torch.cat([
+            bos_embeds,
+            graph_embeds[i].unsqueeze(0),
+            token_embeds[i]
+        ], dim=0)
         full_prompt_embeds.append(sample_embeds)
-    
-    # Pad the prompt embeddings so that all samples have the same length
-    # (Assuming left-padding; you can also use right-padding if that fits your setup better)
-    full_prompt_embeds = nn.utils.rnn.pad_sequence(full_prompt_embeds, batch_first=True,
-                                                   padding_value=pad_embeds.squeeze(0))
-    # Build an attention mask for the prompt part (1 for valid tokens, 0 for padded tokens)
-    max_prompt_len = full_prompt_embeds.size(1)
-    prompt_attention_mask = torch.zeros(batch_size, max_prompt_len, device=device, dtype=torch.long)
-    for i in range(batch_size):
-        # Assume valid tokens are at the end (right-aligned)
-        valid_length = full_prompt_embeds[i].size(0)
+
+    # Correct manual padding with embedding vector:
+    max_length = max(embed.shape[0] for embed in full_prompt_embeds)
+    padded_prompt_embeds = []
+    for embed in full_prompt_embeds:
+        pad_len = max_length - embed.shape[0]
+        padding_tensor = pad_embeds.repeat(pad_len, 1).to(embed.device)
+        padded_embed = torch.cat([padding_tensor, embed], dim=0)
+        padded_prompt_embeds.append(padded_embed)
+
+    full_prompt_embeds = torch.stack(padded_prompt_embeds, dim=0)
+
+    # Attention mask (1 for real tokens, 0 for padding)
+    prompt_attention_mask = torch.zeros(full_prompt_embeds.shape[:2], device=device, dtype=torch.long)
+    for i, embed in enumerate(full_prompt_embeds):
+        valid_length = embed.shape[0] - pad_len
         prompt_attention_mask[i, -valid_length:] = 1
-    
-    # Compute embeddings for the completion tokens
-    completion_embeds = model.word_embedding(completion_ids)  # (batch_size, comp_seq_len, embed_dim)
-    
-    # Concatenate prompt embeddings with completion embeddings to form full sequence embeddings
+
+    # Completion embeddings
+    completion_embeds = model.word_embedding(completion_ids)
+
+    # Concatenate prompt and completion embeddings
     inputs_embeds = torch.cat([full_prompt_embeds, completion_embeds], dim=1)
-    
-    # Create the final attention mask by concatenating the prompt mask with a mask of ones for the completion
-    comp_mask = torch.ones(completion_ids.size(), device=device, dtype=torch.long)
+    comp_mask = torch.ones(completion_ids.shape, device=device, dtype=torch.long)
     final_attention_mask = torch.cat([prompt_attention_mask, comp_mask], dim=1)
-    
-    # Forward pass through the underlying transformer using the combined embeddings
+
+    # Transformer forward pass
     with model.maybe_autocast():
         outputs = model.model(
             inputs_embeds=inputs_embeds,
@@ -384,13 +387,11 @@ def compute_log_probs_multimodal(model, samples, prompt_ids, completion_ids, log
             return_dict=True,
             use_cache=False,
         )
-    
-    # Extract the logits corresponding to the completion tokens (last logits_to_keep tokens)
-    logits = outputs.logits[:, -logits_to_keep:, :]  # (batch_size, logits_to_keep, vocab_size)
+
+    logits = outputs.logits[:, -logits_to_keep:, :]
     trimmed_completion_ids = completion_ids[:, -logits_to_keep:]
-    
-    # Use your custom selective log softmax to compute the log probabilities of the actual tokens
     log_probs = selective_log_softmax(logits, trimmed_completion_ids)
+
     return log_probs
 
 def create_completion_mask(completion_ids, eos_token_id):
@@ -470,8 +471,8 @@ def generate_rollout_data(model, ref_model, batch_samples, num_generations, max_
     logits_to_keep = completion_ids.size(1)
 
     # Compute log probabilities with multimodal inputs for both policy and reference models.
-    old_log_probs = compute_log_probs_multimodal(model, batch_samples, prompt_ids, completion_ids, logits_to_keep)
-    ref_log_probs = compute_log_probs_multimodal(ref_model, batch_samples, prompt_ids, completion_ids, logits_to_keep)
+    old_log_probs = compute_log_probs_multimodal(model, batch_samples, prompt_ids, completion_ids, logits_to_keep, num_generations)
+    ref_log_probs = compute_log_probs_multimodal(ref_model, batch_samples, prompt_ids, completion_ids, logits_to_keep, num_generations)
 
     # Decode completions for reward computation
     decoded = model.tokenizer.batch_decode(completion_ids, skip_special_tokens=True)
@@ -524,12 +525,15 @@ def grpo_loss(model, ref_model, rollout_data, reward_function, beta=0.01, epsilo
     """
     device = model.device
 
-    input_ids = rollout_data["input_ids"]
-    attention_mask = rollout_data["attention_mask"]
+    # Correctly reconstruct the input_ids and attention_mask
+    input_ids = torch.cat([rollout_data["prompt_ids"], rollout_data["completion_ids"]], dim=1)
+    attention_mask = torch.cat([rollout_data["prompt_mask"], rollout_data["completion_mask"]], dim=1)
+
     completion_mask = rollout_data["completion_mask"]
     logits_to_keep = rollout_data["logits_to_keep"]
     old_log_probs = rollout_data["old_log_probs"]
     ref_log_probs = rollout_data["ref_log_probs"]
+
     token_log_probs = compute_log_probs(model, input_ids, attention_mask, logits_to_keep)
     ratio = torch.exp(token_log_probs - old_log_probs)
     rewards = torch.tensor(
@@ -542,7 +546,6 @@ def grpo_loss(model, ref_model, rollout_data, reward_function, beta=0.01, epsilo
     num_generations = rollout_data["num_generations"]
     rewards = rewards.view(batch_size, num_generations)
     avg_reward = rewards.mean().item()
-    print("Average Reward:", avg_reward)
 
     mean_rewards = rewards.mean(dim=1).repeat_interleave(num_generations)
     std_rewards = rewards.std(dim=1).repeat_interleave(num_generations)
